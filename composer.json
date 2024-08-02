@@ -6,7 +6,8 @@
         "google/apiclient": "^2.17",
         "laravel/framework": "^11.9",
         "laravel/tinker": "^2.9",
-        "ext-simplexml": "*"
+        "ext-simplexml": "*",
+        "ext-pdo": "*"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
