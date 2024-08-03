@@ -220,7 +220,7 @@ trait S3Helper
                     foreach ($promises as $promise) {
                         $progress
                             ->label("Processing task ($counter/$limit)")
-                            ->hint("Max limit reached, uploading... might take a while... {$promise->wait()}");
+                            ->hint("Max limit reached, uploading... {$promise->wait()}");
                         $counter++;
                     }
                     $promises = [];
@@ -234,7 +234,7 @@ trait S3Helper
                     )
                 )->then(
                     onFulfilled: fn() => "Uploaded: " . basename($file),
-                    onRejected: fn($e) => "Failed: [$file] {$e->getAwsErrorCode()}"
+                    onRejected: fn($e) => "Failed: [" . basename($file) . "] {$e->getAwsErrorCode()}"
                 );
                 $progress->label("Queueing: " . basename($file))->hint("This may take a while...");
             },
