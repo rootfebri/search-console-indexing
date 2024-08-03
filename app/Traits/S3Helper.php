@@ -220,13 +220,12 @@ trait S3Helper
                     foreach ($promises as $promise) {
                         $progress
                             ->label("Processing task ($counter/$limit)")
-                            ->hint("Max limit reached, uploading... might take a while...");
-
-                        $promise?->wait();
+                            ->hint("Max limit reached, uploading... might take a while... {$promise->wait()}");
                         $counter++;
                     }
                     $promises = [];
                 }
+
                 $promises[] = $this->Client->putObjectAsync(
                     $this->setObjectParams(
                         fullpath: $file,
@@ -234,8 +233,8 @@ trait S3Helper
                         ACL: $isAcl
                     )
                 )->then(
-                    onFulfilled: fn() => $this->info("Uploaded: " . basename($file)),
-                    onRejected: fn($e) => $this->info("Failed: [$file] {$e->getAwsErrorCode()}")
+                    onFulfilled: fn() => "Uploaded: " . basename($file),
+                    onRejected: fn($e) => "Failed: [$file] {$e->getAwsErrorCode()}"
                 );
                 $progress->label("Queueing: " . basename($file))->hint("This may take a while...");
             },
