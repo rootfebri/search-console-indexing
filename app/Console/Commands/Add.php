@@ -110,20 +110,10 @@ class Add extends Command
             return;
         }
 
-        while (true) {
-            $this->flushTerminal();
-            $path = $this->choice("Select directory [Current: " . rtrim($this->path, '.') . "]", $this->scandir($this->path), 0, 3);
+        $this->path = $this->selectDir($this->path);
 
-            if ($path === '.') {
-                $jsonFiles = $this->scanJsonDir();
-                $this->info("Found " . count($jsonFiles) . " json");
-                break;
-            } else if ($path === '..') {
-                $this->path = substr($this->path, 0, strrpos($this->path, DIRECTORY_SEPARATOR));
-            } else {
-                $this->path .= DIRECTORY_SEPARATOR . $path;
-            }
-        }
+        $jsonFiles = $this->scanJsonDir();
+        $this->info("Found " . count($jsonFiles) . " json");
 
         foreach ($jsonFiles as $jsonFile) {
             $data = @file_get_contents($jsonFile);

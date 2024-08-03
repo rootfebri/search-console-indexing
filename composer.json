@@ -3,11 +3,13 @@
     "type": "project",
     "require": {
         "php": "^8.2",
+        "ext-pdo": "*",
+        "ext-simplexml": "*",
+        "aws/aws-sdk-php": "^3.317",
         "google/apiclient": "^2.17",
         "laravel/framework": "^11.9",
         "laravel/tinker": "^2.9",
-        "ext-simplexml": "*",
-        "ext-pdo": "*"
+        "ext-pcntl": "*"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
