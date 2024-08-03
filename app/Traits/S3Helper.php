@@ -6,7 +6,7 @@ use App\Jobs\ProcessUploadS3File;
 use Aws\Credentials\Credentials;
 use Aws\S3\Exception\S3Exception;
 use Aws\S3\S3Client;
-use GuzzleHttp\Promise\Promise;
+use Illuminate\Support\Facades\Cache;
 use Laravel\Prompts\Progress;
 use function Laravel\Prompts\confirm;
 use function Laravel\Prompts\progress;
@@ -209,38 +209,37 @@ trait S3Helper
         $files = array_map(fn($file) => $dir . DIRECTORY_SEPARATOR . $file, $files);
         ini_set('memory_limit', "-1");
 
-        /** @var Promise[] $promises */
-        $promises = [];
+        $mainJobId = time() . '_main';
+        Cache::forever($mainJobId, 1);
+
         progress(
             label: 'Uploading files...',
             steps: $files,
-            callback: function ($file, Progress $progress) use (&$promises, &$isAcl) {
-                if (count($promises) >= 1000) {
-                    $counter = 1;
-
-                    foreach ($promises as $promise) {
-                        ProcessUploadS3File::dispatch($promise, $progress, $counter, count($promises), basename($file));
-                        $counter++;
-                    }
-
-                    $promises = [];
-                }
-
-                $promises[] = $this->Client->putObjectAsync(
-                    $this->setObjectParams(
+            callback: function ($file, Progress $progress) use (&$isAcl, $mainJobId) {
+                $promise = $this->Client
+                    ->putObjectAsync($this->setObjectParams(
                         fullpath: $file,
                         body: @file_get_contents($file),
                         ACL: $isAcl
-                    )
-                )->then(
-                    onFulfilled: fn() => "Uploaded: " . basename($file),
-                    onRejected: fn($e) => "Failed: [" . basename($file) . "] {$e->getAwsErrorCode()}"
-                );
-                $progress->label("Queueing: " . basename($file))->hint("This may take a while...");
+                    ))
+                    ->then(
+                        onFulfilled: fn() => "Uploaded: " . basename($file),
+                        onRejected: fn($e) => "Failed: [" . basename($file) . "] {$e->getAwsErrorCode()}"
+                    );
+
+                ProcessUploadS3File::dispatch($promise, $mainJobId);
+
+                $progress->label("Dispatching jobs to upload " . basename($file))->hint("This may take a while...");
             },
             hint: 'This may take a while'
         );
 
+        if (Cache::has($mainJobId)) {
+            while (Cache::get($mainJobId) < count($files)) {
+                $this->info("Waiting for job completion...");
+                sleep(3);
+            }
+        }
         $this->pause();
     }
 

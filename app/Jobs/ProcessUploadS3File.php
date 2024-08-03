@@ -5,6 +5,7 @@ namespace App\Jobs;
 use GuzzleHttp\Promise\Promise;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Cache;
 use Laravel\Prompts\Progress;
 
 class ProcessUploadS3File implements ShouldQueue
@@ -14,11 +15,8 @@ class ProcessUploadS3File implements ShouldQueue
     /**
      * Create a new job instance.
      */
-    public function __construct(Promise &$promise, Progress &$progress, int &$counter, int $totalPromises, string $fileName)
+    public function __construct(public Promise &$promise, readonly public string $mainJobId)
     {
-        $hint = $promise->wait();
-        $progress->label("Uploading: $counter/$totalPromises")
-            ->hint(is_string($hint) ? $hint : $fileName . " completed");
     }
 
     /**
@@ -26,5 +24,7 @@ class ProcessUploadS3File implements ShouldQueue
      */
     public function handle(): void
     {
+        $this->promise->wait();
+        Cache::increment($this->mainJobId);
     }
 }
