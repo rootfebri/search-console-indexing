@@ -159,19 +159,22 @@ trait HasHelper
         $this->confirm('Press any key to continue...');
     }
 
-    private function setObjectParams(string $key, mixed $body, bool $ACL = true): array
+    private function setObjectParams(string $fullpath, mixed $body, bool $ACL = true): array
     {
+        $default = [
+            'Key' => basename($fullpath),
+            'Body' => $body,
+            'Bucket' => $this->bucket,
+            'Contet-Type' => mime_content_type($fullpath),
+        ];
+
         return match ($ACL) {
             true => [
-                'Key' => $key,
-                'Body' => $body,
-                'Bucket' => $this->bucket,
+                ...$default,
                 'ACL' => 'public-read',
             ],
             false => [
-                'Key' => $key,
-                'Body' => $body,
-                'Bucket' => $this->bucket,
+                ...$default,
             ]
         };
     }

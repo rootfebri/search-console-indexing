@@ -10,7 +10,8 @@
         "guzzlehttp/promises": "^2.0",
         "laravel/framework": "^11.9",
         "laravel/prompts": "^0.1.24",
-        "laravel/tinker": "^2.9"
+        "laravel/tinker": "^2.9",
+        "ext-fileinfo": "*"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

@@ -194,7 +194,7 @@ trait S3Helper
         if ($uploadAsDir) {
             $this->Client->putObject(
                 $this->setObjectParams(
-                    key: basename($dir),
+                    fullpath: $dir,
                     body: $dir,
                     ACL: $isAcl
                 )
@@ -213,7 +213,7 @@ trait S3Helper
             callback: function ($file, Progress $progress) use (&$promises, &$isAcl) {
                 $promises[] = $this->Client->putObjectAsync(
                     $this->setObjectParams(
-                        key: basename($file),
+                        fullpath: $file,
                         body: @file_get_contents($file),
                         ACL: $isAcl
                     )
@@ -227,7 +227,7 @@ trait S3Helper
         );
 
         foreach ($promises as $promise) {
-                $promise?->wait();
+            $promise?->wait();
         }
 
         $this->pause();
@@ -239,7 +239,7 @@ trait S3Helper
         $file = $this->selectFile(base_path());
         $this->Client->putObject(
             $this->setObjectParams(
-                key: basename($file),
+                fullpath: $file,
                 body: @file_get_contents($file),
                 ACL: $isAcl
             )
