@@ -228,7 +228,6 @@ trait S3Helper
                     );
 
                 ProcessUploadS3File::dispatch($promise, $mainJobId);
-
                 $progress->label("Dispatching jobs to upload " . basename($file))->hint("This may take a while...");
             },
             hint: 'This may take a while'

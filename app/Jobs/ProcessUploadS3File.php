@@ -15,8 +15,9 @@ class ProcessUploadS3File implements ShouldQueue
     /**
      * Create a new job instance.
      */
-    public function __construct(public Promise &$promise, readonly public string $mainJobId)
+    public function __construct(public Promise &$promise, public string $mainJobId)
     {
+        $promise->wait();
     }
 
     /**
@@ -24,7 +25,6 @@ class ProcessUploadS3File implements ShouldQueue
      */
     public function handle(): void
     {
-        $this->promise->wait();
         Cache::increment($this->mainJobId);
     }
 }
