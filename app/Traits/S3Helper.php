@@ -227,12 +227,12 @@ trait S3Helper
                         onRejected: fn($e) => "Failed: [" . basename($file) . "] {$e->getAwsErrorCode()}"
                     );
 
-                if (count($promises) > 999) {
+                $progress->label("Dispatching jobs to upload " . basename($file))->hint(count($promises) > 999 ? 'waiting for jobs...' : "This may take a while...");
+                if (count($promises) == 1000) {
                     foreach ($promises as $promise) {
                         ProcessUploadS3File::dispatch($promise, $mainJobId);
                     }
                 }
-                $progress->label("Dispatching jobs to upload " . basename($file))->hint("This may take a while...");
             },
             hint: 'This may take a while'
         );
