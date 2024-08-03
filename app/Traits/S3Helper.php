@@ -95,8 +95,8 @@ trait S3Helper
             } else {
                 $this->info('Failed to create the bucket. Please check your AWS credentials and try again.');
             }
-        } catch (Exception $e) {
-            $this->info('Error occurred: ' . $e->getMessage());
+        } catch (S3Exception $e) {
+            $this->info('Error occurred: ' . $e->getAwsErrorCode());
         }
     }
 
@@ -165,7 +165,7 @@ trait S3Helper
             ]);
             dd($result);
         } catch (S3Exception $e) {
-            $this->info('Failed to delete the bucket. ' . $e->getMessage());
+            $this->info('Failed to delete the bucket. ' . $e->getAwsErrorCode());
         }
     }
 
@@ -218,8 +218,8 @@ trait S3Helper
                         ACL: $isAcl
                     )
                 )->then(
-                    fn() => $this->info("Uploaded: " . basename($file)),
-                    fn($e) => $this->info("Failed: [$file] {$e->getMessage()}")
+                    onFulfilled: fn() => $this->info("Uploaded: " . basename($file)),
+                    onRejected: fn($e) => $this->info("Failed: [$file] {$e->getAwsErrorCode()}")
                 );
                 $progress->label("Processing: $file")->hint("processing...");
             },
