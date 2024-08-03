@@ -227,7 +227,7 @@ trait S3Helper
         );
 
         foreach ($promises as $promise) {
-            $promise->wait();
+                $promise?->wait();
         }
 
         $this->pause();
