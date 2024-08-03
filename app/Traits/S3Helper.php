@@ -204,7 +204,7 @@ trait S3Helper
         }
         $files = array_values(array_filter(scandir($dir), fn($name) => !is_dir($dir . DIRECTORY_SEPARATOR . $name) && file_exists($dir . DIRECTORY_SEPARATOR . $name)));
         $files = array_map(fn($file) => $dir . DIRECTORY_SEPARATOR . $file, $files);
-
+        ini_set('memory_limit', "-1");
         $promises = [];
         $promises = progress(
             label: 'Uploading files...',
