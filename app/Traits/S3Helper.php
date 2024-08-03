@@ -8,6 +8,7 @@ use Aws\S3\S3Client;
 use Exception;
 use function Laravel\Prompts\confirm;
 use function Laravel\Prompts\select;
+use GuzzleHttp\Promise\Promise;
 
 trait S3Helper
 {
@@ -64,36 +65,6 @@ trait S3Helper
             }
         }
         $this->info('Exiting...');
-    }
-
-    private function listBuckets(bool $asLoader = false): void
-    {
-        $this->flushTerminal();
-        $buckets = $this->Client->listBuckets()['Buckets'] ?? [];
-        if (count($this->buckets) < 1) {
-            $this->buckets = array_map(fn($bucket) => $bucket['Name'], $buckets);
-        } else {
-            array_walk($buckets, fn($bucket) => $this->buckets[] = $bucket['Name']);
-        }
-
-        if (!$asLoader) {
-            if (empty($this->buckets)) {
-                $this->info('No S3 buckets found. Please create a bucket first.');
-            } else {
-                $this->info('S3 Buckets:');
-                $indexes = array_keys($this->buckets);
-                array_walk($indexes, fn($index) => $this->line("[$index] {$this->buckets[$index]}"));
-            }
-        }
-    }
-
-    private function selectBucket(): void
-    {
-        $this->flushTerminal();
-        if (empty($this->buckets)) {
-            $this->listBuckets(true);
-        }
-        $this->bucket = select('Select S3 Bucket', $this->buckets, 0, 5);
     }
 
     private function createBucket(): void
@@ -154,6 +125,36 @@ trait S3Helper
         }
     }
 
+    private function selectBucket(): void
+    {
+        $this->flushTerminal();
+        if (empty($this->buckets)) {
+            $this->listBuckets(true);
+        }
+        $this->bucket = select('Select S3 Bucket', $this->buckets, 0, 5);
+    }
+
+    private function listBuckets(bool $asLoader = false): void
+    {
+        $this->flushTerminal();
+        $buckets = $this->Client->listBuckets()['Buckets'] ?? [];
+        if (count($this->buckets) < 1) {
+            $this->buckets = array_map(fn($bucket) => $bucket['Name'], $buckets);
+        } else {
+            array_walk($buckets, fn($bucket) => $this->buckets[] = $bucket['Name']);
+        }
+
+        if (!$asLoader) {
+            if (empty($this->buckets)) {
+                $this->info('No S3 buckets found. Please create a bucket first.');
+            } else {
+                $this->info('S3 Buckets:');
+                $indexes = array_keys($this->buckets);
+                array_walk($indexes, fn($index) => $this->line("[$index] {$this->buckets[$index]}"));
+            }
+        }
+    }
+
     private function listObjects(): void
     {
         $this->flushTerminal();
@@ -203,21 +204,25 @@ trait S3Helper
         }
         $files = array_values(array_filter(scandir($dir), fn($name) => !is_dir($dir . DIRECTORY_SEPARATOR . $name) && file_exists($dir . DIRECTORY_SEPARATOR . $name)));
         $files = array_map(fn($file) => $dir . DIRECTORY_SEPARATOR . $file, $files);
+
+        $promises = [];
         foreach ($files as $file) {
-            try {
-                $this->Client->putObject(
-                    $this->setObjectParams(
-                        key: basename($file),
-                        body: @file_get_contents($file),
-                        ACL: $isAcl
-                    )
-                );
-                $this->info("Uploaded: ". basename($file));
-            } catch (Exception $e) {
-                $this->info("Failed: [$file] {$e->getMessage()}");
-                continue;
-            }
+            $promises[] = $this->Client->putObjectAsync(
+                $this->setObjectParams(
+                    key: basename($file),
+                    body: @file_get_contents($file),
+                    ACL: $isAcl
+                )
+            )->then(
+                fn() => $this->info("Uploaded: " . basename($file)),
+                fn($e) => $this->info("Failed: [$file] {$e->getMessage()}")
+            );
         }
+
+        foreach ($promises as $promise) {
+            $promise->wait();
+        }
+
         $this->pause();
     }
 
