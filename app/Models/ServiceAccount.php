@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class ServiceAccount extends Model
 {
     protected $table = 'service_accounts';
-    protected $fillable = ['email'];
+    protected $fillable = ['email', 'google_verifcation'];
 
     public function apikeys(): HasMany
     {

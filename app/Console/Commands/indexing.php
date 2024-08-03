@@ -111,7 +111,6 @@ class indexing extends Command
     protected function processApiKey(Apikey $apiKey): void
     {
         $this->google_client = $this->indexer($this->google_client);
-//            $this->google_client->setAuthConfig(json_decode($apiKey->data, true));
         $request = $this->google_client->authorize();
 
         foreach ($this->urlLists as $url) {

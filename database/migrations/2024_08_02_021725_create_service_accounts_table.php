@@ -13,6 +13,7 @@ return new class extends Migration {
         Schema::create('service_accounts', function (Blueprint $table) {
             $table->id();
             $table->string('email')->unique();
+            $table->string('google_verifcation')->unique()->nullable();
             $table->timestamps();
         });
     }

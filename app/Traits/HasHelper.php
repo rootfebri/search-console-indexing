@@ -13,24 +13,17 @@ trait HasHelper
      * @param string|null $at
      * @return string[]
      */
-    public function scanJsonDir(?string $at = null): array
+    public function scanJsonDir(): array
     {
-        $base = storage_path('json' . $at ? trim(DIRECTORY_SEPARATOR . $at . DIRECTORY_SEPARATOR) : DIRECTORY_SEPARATOR);
-        if ($at && !is_dir($base)) {
-            try {
-                $base = storage_path('json' . DIRECTORY_SEPARATOR . explode('@', $at)[0] . DIRECTORY_SEPARATOR);
-                if (!is_dir($base)) {
-                    $base = storage_path('json' . DIRECTORY_SEPARATOR . $at . DIRECTORY_SEPARATOR);
-                }
-            } catch (\Exception) {
-                $base = storage_path('json' . DIRECTORY_SEPARATOR . $at . DIRECTORY_SEPARATOR);
-            }
-        }
+        $jsonFiles = array_filter(scandir($this->path), fn ($file) => str_ends_with($file, '.json'));
 
-        $jsonFiles = array_filter(scandir($base), fn ($file) => str_ends_with($file, '.json'));
-
-        return array_map(fn($fileName) => $base . basename($fileName), array_values($jsonFiles));
+        return array_map(fn($fileName) => $this->path . DIRECTORY_SEPARATOR . basename($fileName), array_values($jsonFiles));
         //                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^ Expected to be: json/{at}|{email}|{username}/*.json
+    }
+
+    protected function scandir(string $path): array
+    {
+        return array_values(array_filter(scandir($path), fn($file) => is_dir($path . DIRECTORY_SEPARATOR . $file)));
     }
 
     protected function validateEmail(string $email): bool
@@ -54,5 +47,14 @@ trait HasHelper
             return response()->json($status->messages()->toArray(), 422);
         }
         return $status->validated();
+    }
+
+    protected function flushTerminal(): void
+    {
+        if (str_starts_with(strtolower(PHP_OS), 'win')) {
+            echo chr(27) . chr(91) . 'H' . chr(27) . chr(91) . 'J';
+        } else {
+            system('clear');
+        }
     }
 }
