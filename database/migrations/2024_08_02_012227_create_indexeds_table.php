@@ -14,7 +14,7 @@ return new class extends Migration {
             $table->id();
             $table->string('sitemap_url');
             $table->string('url');
-            $table->boolean('success')->default(false);;
+            $table->boolean('success')->default(false);
             $table->timestamps();
         });
     }

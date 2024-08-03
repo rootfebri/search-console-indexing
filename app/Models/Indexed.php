@@ -8,5 +8,5 @@ use Illuminate\Database\Eloquent\Model;
 class Indexed extends Model
 {
     protected $table = 'indexeds';
-    protected $fillable = ['url', 'success'];
+    protected $fillable = ['sitemap_url', 'url', 'success'];
 }

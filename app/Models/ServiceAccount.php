@@ -14,4 +14,9 @@ class ServiceAccount extends Model
     {
         return $this->hasMany(Apikey::class);
     }
+
+    public function oauths(): HasMany
+    {
+        return $this->hasMany(OAuthModel::class);
+    }
 }

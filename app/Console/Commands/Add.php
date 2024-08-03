@@ -2,9 +2,11 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Apikey;
 use App\Models\ServiceAccount;
 use App\Traits\HasHelper;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Cache;
 
 class Add extends Command
 {
@@ -17,6 +19,7 @@ class Add extends Command
         'ServiceAccount',
         'Sitemap',
     ];
+    protected string $email = '';
 
     public function handle(): void
     {
@@ -29,33 +32,71 @@ class Add extends Command
         $this->{$this->task}();
     }
 
+    public function OAuth(): void
+    {
+        if (ServiceAccount::count() > 0) {
+            $serviceAccounts = ['*NEW*', ...ServiceAccount::all()->pluck('email')->toArray()];
+
+            $this->email = $this->choice('Pilih akun service', $serviceAccounts);
+            if ($this->email !== '*NEW*') {
+                $apikeys = ServiceAccount::where('email', $this->email)->first()->apikeys()->get();
+            }
+        }
+
+        while (!$this->validateEmail($this->email)) {
+            $this->email = $this->ask('Email');
+            $apikeys ??= ServiceAccount::firstOrCreate(['email' => $this->email])->apikeys()->get();
+        }
+        array_walk($apikeys, function (Apikey $apikey) {
+            try {
+                $credential = (object)json_decode($apikey->data)->installed;
+            } catch (\Exception $e) {
+                $this->error("Error: " . $e->getMessage());
+                return;
+            }
+
+            if (Cache::has($credential->project_id)) {
+                Cache::forget($credential->project_id);
+            } else {
+                Cache::forever($credential->project_id, $credential);
+            }
+
+            $this->line("Go to: " . route('oauth.index', $credential->project_id));
+
+            while (Cache::get($credential->project_id . '.finished') === null | false) sleep(3);
+
+            $this->info("Done!");
+        });
+    }
+
     public function ServiceAccount(): void
     {
-        $emailService = $this->ask('Email');
-        $serviceAccount = ServiceAccount::where('email', $emailService);
-        if (!$serviceAccount->exists()) {
-            $serviceAccount = ServiceAccount::create(['email' => $emailService]);
+        if (ServiceAccount::count() > 0) {
+            $serviceAccounts = ['*NEW*', ...ServiceAccount::all()->pluck('email')->toArray()];
+
+            $this->email = $this->choice('Pilih akun service', $serviceAccounts);
+            if ($this->email !== '*NEW*') {
+                $serviceAccount = ServiceAccount::where('email', $this->email)->first();
+            }
         }
 
-        $totalApikeys = $serviceAccount->apikeys_count;
-        if ($totalApikeys > 5) {
-            $this->error("Maximum number of API keys reached. Please delete an API key first.");
-            return;
+        while (!$this->validateEmail($this->email)) {
+            $this->email = $this->ask('Email');
         }
 
-        $jsonFiles = $this->scanJsonDir($emailService);
-        foreach ($jsonFiles as $jsonFile) {
+        $serviceAccount ??= ServiceAccount::firstOrCreate(['email' => $this->email]);
+
+        foreach ($this->scanJsonDir($this->email) as $jsonFile) {
+            $truncFilename = substr(basename($jsonFile), 0, 15) . "...";
             $data = @file_get_contents($jsonFile);
             if (!$data) continue;
-            if ($totalApikeys >= 5) break;
             if (!$serviceAccount->apikeys()->create(['data' => $data])) {
-                $this->error("Error adding API key $jsonFile for: $serviceAccount->email");
+                $this->line("Error adding API key $truncFilename for: $serviceAccount->email");
                 continue;
             }
 
-            $this->info("API key $jsonFile added for: $serviceAccount->email");
+            $this->info("API key $truncFilename added for: $serviceAccount->email");
             unlink($jsonFile);
-            $totalApikeys++;
         }
 
         $this->info("Done!");
