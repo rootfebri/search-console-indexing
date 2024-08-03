@@ -5,7 +5,7 @@ namespace App\Traits;
 use Aws\Credentials\Credentials;
 use Aws\S3\Exception\S3Exception;
 use Aws\S3\S3Client;
-use Exception;
+use GuzzleHttp\Promise\Promise;
 use Laravel\Prompts\Progress;
 use function Laravel\Prompts\confirm;
 use function Laravel\Prompts\progress;
@@ -23,6 +23,7 @@ trait S3Helper
 
     public S3Client $Client;
     public Credentials $Credentials;
+    public array $promises = [];
 
     public function init(): void
     {
@@ -206,8 +207,9 @@ trait S3Helper
         $files = array_values(array_filter(scandir($dir), fn($name) => !is_dir($dir . DIRECTORY_SEPARATOR . $name) && file_exists($dir . DIRECTORY_SEPARATOR . $name)));
         $files = array_map(fn($file) => $dir . DIRECTORY_SEPARATOR . $file, $files);
         ini_set('memory_limit', "-1");
+        /** @var Promise[] $promises */
         $promises = [];
-        $promises = progress(
+        progress(
             label: 'Uploading files...',
             steps: $files,
             callback: function ($file, Progress $progress) use (&$promises, &$isAcl) {
@@ -221,7 +223,7 @@ trait S3Helper
                     onFulfilled: fn() => $this->info("Uploaded: " . basename($file)),
                     onRejected: fn($e) => $this->info("Failed: [$file] {$e->getAwsErrorCode()}")
                 );
-                $progress->label("Processing: $file")->hint("processing...");
+                $progress->label("Queueing: " . basename($file))->hint("This may take a while...");
             },
             hint: 'This may take a while'
         );
