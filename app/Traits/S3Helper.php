@@ -213,6 +213,13 @@ trait S3Helper
             label: 'Uploading files...',
             steps: $files,
             callback: function ($file, Progress $progress) use (&$promises, &$isAcl) {
+                if (count($promises) > 1000) {
+                    $progress->label("Max limit reached, uploading")->hint("This may take a while...");
+                    foreach ($promises as $promise) {
+                        $promise?->wait();
+                    }
+                    $promises = [];
+                }
                 $promises[] = $this->Client->putObjectAsync(
                     $this->setObjectParams(
                         fullpath: $file,
@@ -227,10 +234,6 @@ trait S3Helper
             },
             hint: 'This may take a while'
         );
-
-        foreach ($promises as $promise) {
-            $promise?->wait();
-        }
 
         $this->pause();
     }
