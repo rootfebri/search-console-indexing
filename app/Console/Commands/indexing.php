@@ -2,11 +2,11 @@
 
 namespace App\Console\Commands;
 
-use App\Models\Apikey;
 use App\Models\Indexed;
+use App\Models\OAuthModel;
 use App\Models\ServiceAccount;
 use App\Traits\GoogleOAuth;
-use Google\Exception;
+use App\Traits\HasConstant;
 use Google_Client;
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
@@ -16,7 +16,8 @@ use Throwable;
 
 class indexing extends Command
 {
-    use GoogleOAuth;
+    use GoogleOAuth, HasConstant;
+
     protected const ENDPOINT_URL_UPDATED = 'https://indexing.googleapis.com/v3/urlNotifications:publish';
     /**
      * The name and signature of the console command.
@@ -29,7 +30,7 @@ class indexing extends Command
     protected ?string $sitemap = '';
     protected ServiceAccount $account;
     protected array $content = ['type' => "URL_UPDATED"];
-    protected bool $alwaysContinue = false;
+    protected bool $alwaysContinue = true;
 
     public function __construct(protected Google_Client $google_client)
     {
@@ -43,6 +44,18 @@ class indexing extends Command
         $this->line("Indexing started...");
         $this->cleanup();
         $this->selectServiceAccount();
+
+        if ($this->account->google_verifcation) {
+            $baseFile = basename($this->sitemap);
+            $gVerify = "{$this->account->google_verifcation}.html";
+            $areYouOwner = @file_get_contents(str_replace($baseFile, $gVerify, $this->sitemap));
+            if (!$areYouOwner || str_contains($areYouOwner, $this->account->google_verifcation)) {
+                if (!$this->confirm("$gVerify tidak ditemukan, Tetap lanjutkan?")) {
+                    return;
+                };
+            };
+        }
+
         $this->runIndexing();
         $this->line("Done!");
     }
@@ -85,8 +98,8 @@ class indexing extends Command
             ->toArray();
 
         $this->urlLists = array_filter($this->urlLists, fn($url) => !in_array($url, $lessThan24Hours));
-        $this->line(count($this->urlLists) . " URLs after cleanup");
-        shuffle($this->urlLists);
+        $this->line(count($this->urlLists) . " URLs left after cleanup");
+        $this->confirm('Randomize urls?', true) && shuffle($this->urlLists);
     }
 
     protected function selectServiceAccount(): void
@@ -96,48 +109,52 @@ class indexing extends Command
             ->toArray();
 
         $email = $this->choice("Enter service account ID", $accounts);
-        $this->account = ServiceAccount::where('email', $email)->first();
+        if (!$this->account = ServiceAccount::where('email', $email)->first()) {
+            $this->error('Something went wrong!');
+            exit(1);
+        }
     }
 
     protected function runIndexing(): void
     {
-        $apis = $this->account->apikeys()->where('used', '<=', 2000)->get();
+        $oauths = $this->account->oauths()->where('limit', '<=', self::MAX_INDEXING);
 
-        foreach ($apis as $apiKey) {
-            $this->processApiKey($apiKey);
+        foreach ($oauths as $oauth) {
+            $this->processApiKey($oauth);
         }
     }
 
-    protected function processApiKey(Apikey $apiKey): void
+    protected function processApiKey(OAuthModel $oauth): void
     {
-        $this->google_client = $this->indexer($this->google_client);
+        $this->google_client = $this->indexer($this->google_client, $oauth);
         $request = $this->google_client->authorize();
+        if ($oauth->limit < 1) {
+            if ($oauth->refresh_time <= now()->subHours(24)) {
+                $oauth->limit = 200;
+                $oauth->refresh_time = now();
+                $oauth->save();
+            } else {
+                return;
+            }
+        }
 
         foreach ($this->urlLists as $url) {
-            if ($apiKey->used >= 200 && $apiKey->updated_at < now()->subHours(24)) {
-                $apiKey->used = 0;
-                $apiKey->updated_at = now();
-                $apiKey->save();
-            }
-            if ($apiKey->used >= 2000) break;
-
             $this->content['url'] = $url;
             unset($this->urlLists[$url]);
-
             $status = $this->requestIndex($request);
-            if ($status === null) break;
-            $apiKey->used++;
-            $apiKey->save();
-            if ($status === false && !$this->alwaysContinue) {
-                $this->alwaysContinue = $this->confirm('Do you want to continue indexing?');
+
+            if ($status === null) {
+                break;
+            } else {
+                $oauth->limit--;
+                $oauth->save();
+            }
+
+            $status === false && $this->alwaysContinue && $this->alwaysContinue = $this->confirm('Request gagal, selalu tanya untuk melanjutkan?', true);
+            if ($oauth->limit < 1) {
+                break;
             }
         }
-    }
-
-    protected function logError(string $message, Throwable $e): void
-    {
-        $this->line($message);
-        $this->line($e->getMessage());
     }
 
     protected function requestIndex(Client|ClientInterface $request): ?bool
@@ -157,7 +174,7 @@ class indexing extends Command
                 $indexed->success = false;
                 $this->line("[$code] $url -> Request failed!");
                 if ($hasMessage = @json_decode($response->getBody()->getContents(), true))
-                    $this->line("Message/Code: ". $hasMessage['error']['message'] ?? $code);
+                    $this->line("Message/Code: " . $hasMessage['error']['message'] ?? $code);
             }
         } catch (GuzzleException $e) {
             $this->logError("Error occurred while indexing URL: $url", $e);
@@ -166,5 +183,11 @@ class indexing extends Command
 
         $indexed->save();
         return $code >= 200 && $code < 300 ? true : ($code >= 300 && $code < 600 ? false : null);
+    }
+
+    protected function logError(string $message, Throwable $e): void
+    {
+        $this->line($message);
+        $this->line($e->getMessage());
     }
 }

@@ -11,12 +11,12 @@ use Illuminate\Support\Facades\Cache;
 
 trait GoogleOAuth
 {
-    public function indexer(Google_Client $client): Google_Client
+    public function indexer(Google_Client $client, OAuthModel $oauth): Google_Client
     {
         $client->setHttpClient(new Request());
-        $client->setClientId("");
-        $client->setClientSecret("");
-        $client->refreshToken("");
+        $client->setClientId($oauth->client_id);
+        $client->setClientSecret($oauth->client_secret);
+        $client->refreshToken($oauth->refresh_token);
         $client->addScope('https://www.googleapis.com/auth/indexing');
 
         return $client;
