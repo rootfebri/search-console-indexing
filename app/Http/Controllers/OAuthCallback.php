@@ -31,7 +31,7 @@ class OAuthCallback extends Controller
             } catch (Exception $exception) {
                 return $this->throwErr($exception->getMessage());
             }
-            Cache::forever('authentication', $this->client->fetchAccessTokenWithAuthCode($request->code));
+            if (config('app.env') !== 'production') Cache::forever('authentication', $this->client->fetchAccessTokenWithAuthCode($request->code));
         }
 
         $token = $this->client->getAccessToken();
