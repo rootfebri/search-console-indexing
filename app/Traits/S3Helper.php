@@ -6,6 +6,7 @@ use Aws\Credentials\Credentials;
 use Aws\S3\Exception\S3Exception;
 use Aws\S3\S3Client;
 use Exception;
+use Laravel\Prompts\Progress;
 use function Laravel\Prompts\confirm;
 use function Laravel\Prompts\progress;
 use function Laravel\Prompts\select;
@@ -209,7 +210,7 @@ trait S3Helper
         $promises = progress(
             label: 'Uploading files...',
             steps: $files,
-            callback: function ($file, \Laravel\Prompts\Progress $progress) use (&$promises, &$isAcl) {
+            callback: function ($file, Progress $progress) use (&$promises, &$isAcl) {
                 $promises[] = $this->Client->putObjectAsync(
                     $this->setObjectParams(
                         key: basename($file),
