@@ -211,12 +211,12 @@ trait S3Helper
 
         $mainJobId = time() . '_main';
         Cache::forever($mainJobId, 1);
-
+        $promises = [];
         progress(
             label: 'Uploading files...',
             steps: $files,
-            callback: function ($file, Progress $progress) use (&$isAcl, $mainJobId) {
-                $promise = $this->Client
+            callback: function ($file, Progress $progress) use (&$promises, &$isAcl, $mainJobId) {
+                $promises[] = $this->Client
                     ->putObjectAsync($this->setObjectParams(
                         fullpath: $file,
                         body: @file_get_contents($file),
@@ -227,7 +227,11 @@ trait S3Helper
                         onRejected: fn($e) => "Failed: [" . basename($file) . "] {$e->getAwsErrorCode()}"
                     );
 
-                ProcessUploadS3File::dispatch($promise, $mainJobId);
+                if (count($promises) > 999) {
+                    foreach ($promises as $promise) {
+                        ProcessUploadS3File::dispatch($promise, $mainJobId);
+                    }
+                }
                 $progress->label("Dispatching jobs to upload " . basename($file))->hint("This may take a while...");
             },
             hint: 'This may take a while'
