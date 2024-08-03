@@ -214,10 +214,13 @@ trait S3Helper
             steps: $files,
             callback: function ($file, Progress $progress) use (&$promises, &$isAcl) {
                 if (count($promises) >= 1000) {
+                    $counter = 1;
+
                     foreach ($promises as $promise) {
                         $progress
-                            ->label("Processing: " . basename($file))
+                            ->label("Uploading: $counter/" . count($promises))
                             ->hint($promise->wait());
+                        $counter++;
                     }
                     $promises = [];
                 }
