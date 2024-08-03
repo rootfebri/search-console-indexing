@@ -52,8 +52,8 @@ class indexing extends Command
             if (!$areYouOwner || str_contains($areYouOwner, $this->account->google_verifcation)) {
                 if (!$this->confirm("$gVerify tidak ditemukan, Tetap lanjutkan?")) {
                     return;
-                };
-            };
+                }
+            }
         }
 
         $this->runIndexing();
