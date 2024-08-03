@@ -8,7 +8,6 @@ use Aws\S3\S3Client;
 use Exception;
 use function Laravel\Prompts\confirm;
 use function Laravel\Prompts\select;
-use GuzzleHttp\Promise\Promise;
 
 trait S3Helper
 {
