@@ -2,6 +2,7 @@
 
 namespace App\Traits;
 
+use App\Jobs\ProcessUploadS3File;
 use Aws\Credentials\Credentials;
 use Aws\S3\Exception\S3Exception;
 use Aws\S3\S3Client;
@@ -207,6 +208,7 @@ trait S3Helper
         $files = array_values(array_filter(scandir($dir), fn($name) => !is_dir($dir . DIRECTORY_SEPARATOR . $name) && file_exists($dir . DIRECTORY_SEPARATOR . $name)));
         $files = array_map(fn($file) => $dir . DIRECTORY_SEPARATOR . $file, $files);
         ini_set('memory_limit', "-1");
+
         /** @var Promise[] $promises */
         $promises = [];
         progress(
@@ -217,11 +219,10 @@ trait S3Helper
                     $counter = 1;
 
                     foreach ($promises as $promise) {
-                        $progress
-                            ->label("Uploading: $counter/" . count($promises))
-                            ->hint($promise->wait());
+                        ProcessUploadS3File::dispatch($promise, $progress, $counter, count($promises), basename($file));
                         $counter++;
                     }
+
                     $promises = [];
                 }
 
