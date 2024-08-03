@@ -7,6 +7,7 @@ use Aws\S3\Exception\S3Exception;
 use Aws\S3\S3Client;
 use Exception;
 use function Laravel\Prompts\confirm;
+use function Laravel\Prompts\progress;
 use function Laravel\Prompts\select;
 
 trait S3Helper
@@ -205,18 +206,24 @@ trait S3Helper
         $files = array_map(fn($file) => $dir . DIRECTORY_SEPARATOR . $file, $files);
 
         $promises = [];
-        foreach ($files as $file) {
-            $promises[] = $this->Client->putObjectAsync(
-                $this->setObjectParams(
-                    key: basename($file),
-                    body: @file_get_contents($file),
-                    ACL: $isAcl
-                )
-            )->then(
-                fn() => $this->info("Uploaded: " . basename($file)),
-                fn($e) => $this->info("Failed: [$file] {$e->getMessage()}")
-            );
-        }
+        $promises = progress(
+            label: 'Uploading files...',
+            steps: $files,
+            callback: function ($file, \Laravel\Prompts\Progress $progress) use (&$promises, &$isAcl) {
+                $promises[] = $this->Client->putObjectAsync(
+                    $this->setObjectParams(
+                        key: basename($file),
+                        body: @file_get_contents($file),
+                        ACL: $isAcl
+                    )
+                )->then(
+                    fn() => $this->info("Uploaded: " . basename($file)),
+                    fn($e) => $this->info("Failed: [$file] {$e->getMessage()}")
+                );
+                $progress->label("Processing: $file")->hint("processing...");
+            },
+            hint: 'This may take a while'
+        );
 
         foreach ($promises as $promise) {
             $promise->wait();
