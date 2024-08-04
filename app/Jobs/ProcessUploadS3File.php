@@ -2,31 +2,37 @@
 
 namespace App\Jobs;
 
+use AllowDynamicProperties;
+use Aws\Credentials\Credentials;
 use Aws\S3\S3Client;
-use GuzzleHttp\Promise\Promise;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Support\Facades\Cache;
-use Laravel\Prompts\Progress;
 
-class ProcessUploadS3File implements ShouldQueue
+#[AllowDynamicProperties] class ProcessUploadS3File implements ShouldQueue
 {
     use Queueable;
-    public S3Client $client;
+
+    public S3Client $Client;
 
     /**
      * Create a new job instance.
      */
-    public function __construct(public mixed $cacheId, array $params)
-    {
-    }
+    public function __construct(
+        public Credentials $credentials,
+        public string $region,
+        array $params
+    ){}
 
     /**
      * Execute the job.
      */
     public function handle(): void
     {
-        $this->client = Cache::pull($this->cacheId);
-        $this->client->putObject($this->params);
+        $this->Client = new S3Client([
+            'region' => $this->region,
+            'version' => 'latest',
+            'credentials' => $this->Credentials
+        ]);
+        $this->Client->putObject($this->params);
     }
 }

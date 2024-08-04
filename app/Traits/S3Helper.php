@@ -14,7 +14,6 @@ use function Laravel\Prompts\select;
 
 trait S3Helper
 {
-    public string $cwd = '';
     public string $access_key = '';
     public string $secret_key = '';
     public string $region = '';
@@ -220,11 +219,7 @@ trait S3Helper
                     body: @file_get_contents($file),
                     ACL: $isAcl
                 );
-
-                $cacheId = microtime(true);
-                Cache::forever($cacheId, $this->Client);
-
-                ProcessUploadS3File::dispatch($cacheId, $params);
+                ProcessUploadS3File::dispatch($this->Credentials, $this->region, $params);
             },
             hint: 'This might take a while, please be patient.'
         );
