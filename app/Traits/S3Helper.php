@@ -216,10 +216,11 @@ trait S3Helper
             label: 'Uploading files...',
             steps: $files,
             callback: function ($file, Progress $progress) use (&$promises, &$isAcl, $mainJobId) {
+                $body = @file_get_contents($file);
                 $promises[] = $this->Client
                     ->putObjectAsync($this->setObjectParams(
                         fullpath: $file,
-                        body: @file_get_contents($file),
+                        body: $body,
                         ACL: $isAcl
                     ))
                     ->then(
