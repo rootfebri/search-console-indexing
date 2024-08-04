@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use Aws\S3\S3Client;
 use GuzzleHttp\Promise\Promise;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -15,9 +16,8 @@ class ProcessUploadS3File implements ShouldQueue
     /**
      * Create a new job instance.
      */
-    public function __construct(public Promise &$promise, public string $mainJobId)
+    public function __construct(public S3Client $client, array $params)
     {
-        $promise->wait();
     }
 
     /**
@@ -25,6 +25,6 @@ class ProcessUploadS3File implements ShouldQueue
      */
     public function handle(): void
     {
-        Cache::increment($this->mainJobId);
+        $this->client->putObject($this->params);
     }
 }

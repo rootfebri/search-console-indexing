@@ -6,7 +6,6 @@ use App\Jobs\ProcessUploadS3File;
 use Aws\Credentials\Credentials;
 use Aws\S3\Exception\S3Exception;
 use Aws\S3\S3Client;
-use Illuminate\Support\Facades\Cache;
 use Laravel\Prompts\Progress;
 use function Laravel\Prompts\confirm;
 use function Laravel\Prompts\progress;
@@ -188,6 +187,7 @@ trait S3Helper
 
     private function bulkUpload($isAcl): void
     {
+        ini_set('memory_limit', "-1");
         $dir = $this->selectDir(base_path());
         $choses = ['Upload this folder' => true, 'Files only' => false];
         $selected = $this->choices('Select upload type', array_keys($choses));
@@ -207,40 +207,43 @@ trait S3Helper
         }
         $files = array_values(array_filter(scandir($dir), fn($name) => !is_dir($dir . DIRECTORY_SEPARATOR . $name) && file_exists($dir . DIRECTORY_SEPARATOR . $name)));
         $files = array_map(fn($file) => $dir . DIRECTORY_SEPARATOR . $file, $files);
-        ini_set('memory_limit', "-1");
-
-        $mainJobId = time() . '_main';
-        Cache::forever($mainJobId, 1);
-        $promises = [];
-        progress(
+        $totalFiles = count($files);
+        $progress = progress(
             label: 'Uploading files...',
             steps: $files,
-            callback: function ($file, Progress $progress) use (&$promises, &$isAcl, $mainJobId) {
-                $body = @file_get_contents($file);
-                $promises[] = $this->Client
-                    ->putObject($this->setObjectParams(
-                        fullpath: $file,
-                        body: $body,
-                        ACL: $isAcl
-                    ));
-
-                $progress->label("Dispatching jobs to upload " . basename($file))->hint(count($promises) > 999 ? 'waiting for jobs...' : "This may take a while...");
-                if (count($promises) == 1000) {
-                    foreach ($promises as $promise) {
-                        ProcessUploadS3File::dispatch($promise, $mainJobId);
-                    }
-                }
+            callback: function ($file, Progress $progress) use ($isAcl, $totalFiles) {
+                $progress->label("Uploading " . basename($file))->hint("Estimated time: " . $this->calculateTime($totalFiles, $progress->steps));
+                $params = $this->setObjectParams(
+                    fullpath: $file,
+                    body: @file_get_contents($file),
+                    ACL: $isAcl
+                );
+                ProcessUploadS3File::dispatch($this->Client, $params);
             },
-            hint: 'This may take a while'
+            hint: 'This might take a while, please be patient.'
         );
 
-        if (Cache::has($mainJobId)) {
-            while (Cache::get($mainJobId) < count($files)) {
-                $this->info("Waiting for job completion...");
-                sleep(3);
-            }
-        }
         $this->pause();
+        $progress->finish();
+    }
+
+    public function calculateTime($totalSteps, $currentStep): string
+    {
+        $time = (microtime(true) - $this->startTime) * 1000;
+        $timeStep = $time / $currentStep;
+        $timeRemaining = ($totalSteps - $currentStep) * $timeStep;
+        return $this->convertSecondsToTime($timeRemaining);
+    }
+
+    public function convertSecondsToTime(float|int $timeRemaining): string
+    {
+        $seconds = $timeRemaining % 60;
+        $minutes = ($timeRemaining / 60) % 60;
+        $hours = ($timeRemaining / 3600);
+        $seconds = str_pad($seconds, 2, '0', STR_PAD_LEFT);
+        $minutes = str_pad($minutes, 2, '0', STR_PAD_LEFT);
+        $hours = str_pad($hours, 2, '0', STR_PAD_LEFT);
+        return "$hours:$minutes:$seconds";
     }
 
     private function upload($isAcl): void
