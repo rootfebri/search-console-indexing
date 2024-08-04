@@ -221,7 +221,6 @@ trait S3Helper
                     ACL: $isAcl
                 );
                 ProcessUploadS3File::dispatch($this->Credentials, $this->region, $params);
-                exit(0);
             },
             hint: 'This might take a while, please be patient.'
         );
