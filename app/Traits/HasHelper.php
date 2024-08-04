@@ -165,7 +165,7 @@ trait HasHelper
             'Key' => basename($fullpath),
             'Body' => $body,
             'Bucket' => $this->bucket,
-            'Contet-Type' => mime_content_type($fullpath),
+            'ContentType' => mime_content_type($fullpath),
         ];
 
         return match ($ACL) {

@@ -209,23 +209,23 @@ trait S3Helper
         $files = array_map(fn($file) => $dir . DIRECTORY_SEPARATOR . $file, $files);
         $totalFiles = count($files);
         $this->startTime = microtime(true);
-        $progress = progress(
+        progress(
             label: 'Uploading files...',
             steps: $files,
             callback: function ($file, Progress $progress) use ($isAcl, $totalFiles) {
-                $progress->label("Uploading " . basename($file))->hint("Estimated time: " . $this->calculateTime($totalFiles, (int)$progress->steps));
+                $progress->label("Uploading " . basename($file))->hint("[" . (int)$progress->steps . "]Estimated time: " . $this->calculateTime($totalFiles, (int)$progress->steps));
                 $params = $this->setObjectParams(
                     fullpath: $file,
                     body: @file_get_contents($file),
                     ACL: $isAcl
                 );
                 ProcessUploadS3File::dispatch($this->Credentials, $this->region, $params);
+                exit(0);
             },
             hint: 'This might take a while, please be patient.'
         );
 
         $this->pause();
-        $progress->finish();
     }
 
     public function calculateTime($totalSteps, $currentStep): string
