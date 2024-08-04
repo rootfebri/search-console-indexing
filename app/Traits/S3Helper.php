@@ -208,6 +208,7 @@ trait S3Helper
         $files = array_values(array_filter(scandir($dir), fn($name) => !is_dir($dir . DIRECTORY_SEPARATOR . $name) && file_exists($dir . DIRECTORY_SEPARATOR . $name)));
         $files = array_map(fn($file) => $dir . DIRECTORY_SEPARATOR . $file, $files);
         $totalFiles = count($files);
+        $this->startTime = microtime(true);
         $progress = progress(
             label: 'Uploading files...',
             steps: $files,
