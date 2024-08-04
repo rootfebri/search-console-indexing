@@ -12,7 +12,7 @@ use Exception;
 use Illuminate\Console\Command;
 use function Laravel\Prompts\select;
 
-#[AllowDynamicProperties] class S3 extends Command
+class S3 extends Command
 {
     use S3Helper, HasConstant, HasHelper;
     protected $signature = 's3';

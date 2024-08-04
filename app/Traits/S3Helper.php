@@ -14,6 +14,7 @@ use function Laravel\Prompts\select;
 
 trait S3Helper
 {
+    public mixed $startTime;
     public string $access_key = '';
     public string $secret_key = '';
     public string $region = '';
