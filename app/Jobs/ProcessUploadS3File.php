@@ -19,7 +19,7 @@ class ProcessUploadS3File implements ShouldQueue
     public function __construct(
         public Credentials $credentials,
         public string      $region,
-        array              $params
+        public array       $params
     )
     {
     }
