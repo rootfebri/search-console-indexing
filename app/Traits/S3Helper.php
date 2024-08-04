@@ -218,15 +218,11 @@ trait S3Helper
             callback: function ($file, Progress $progress) use (&$promises, &$isAcl, $mainJobId) {
                 $body = @file_get_contents($file);
                 $promises[] = $this->Client
-                    ->putObjectAsync($this->setObjectParams(
+                    ->putObject($this->setObjectParams(
                         fullpath: $file,
                         body: $body,
                         ACL: $isAcl
-                    ))
-                    ->then(
-                        onFulfilled: fn() => "Uploaded: " . basename($file),
-                        onRejected: fn($e) => "Failed: [" . basename($file) . "] {$e->getAwsErrorCode()}"
-                    );
+                    ));
 
                 $progress->label("Dispatching jobs to upload " . basename($file))->hint(count($promises) > 999 ? 'waiting for jobs...' : "This may take a while...");
                 if (count($promises) == 1000) {
