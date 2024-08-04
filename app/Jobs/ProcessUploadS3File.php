@@ -32,7 +32,7 @@ class ProcessUploadS3File implements ShouldQueue
         $this->Client = new S3Client([
             'region' => $this->region,
             'version' => 'latest',
-            'credentials' => $this->Credentials
+            'credentials' => $this->credentials
         ]);
         $this->Client->putObject($this->params);
     }
