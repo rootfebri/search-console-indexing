@@ -12,11 +12,12 @@ use Laravel\Prompts\Progress;
 class ProcessUploadS3File implements ShouldQueue
 {
     use Queueable;
+    public S3Client $client;
 
     /**
      * Create a new job instance.
      */
-    public function __construct(public S3Client $client, array $params)
+    public function __construct(public mixed $cacheId, array $params)
     {
     }
 
@@ -25,6 +26,7 @@ class ProcessUploadS3File implements ShouldQueue
      */
     public function handle(): void
     {
+        $this->client = Cache::pull($this->cacheId);
         $this->client->putObject($this->params);
     }
 }

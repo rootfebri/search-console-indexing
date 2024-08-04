@@ -6,6 +6,7 @@ use App\Jobs\ProcessUploadS3File;
 use Aws\Credentials\Credentials;
 use Aws\S3\Exception\S3Exception;
 use Aws\S3\S3Client;
+use Illuminate\Support\Facades\Cache;
 use Laravel\Prompts\Progress;
 use function Laravel\Prompts\confirm;
 use function Laravel\Prompts\progress;
@@ -213,13 +214,17 @@ trait S3Helper
             label: 'Uploading files...',
             steps: $files,
             callback: function ($file, Progress $progress) use ($isAcl, $totalFiles) {
-                $progress->label("Uploading " . basename($file))->hint("Estimated time: " . $this->calculateTime($totalFiles, $progress->steps));
+                $progress->label("Uploading " . basename($file))->hint("Estimated time: " . $this->calculateTime($totalFiles, (int)$progress->steps));
                 $params = $this->setObjectParams(
                     fullpath: $file,
                     body: @file_get_contents($file),
                     ACL: $isAcl
                 );
-                ProcessUploadS3File::dispatch($this->Client, $params);
+
+                $cacheId = microtime(true);
+                Cache::forever($cacheId, $this->Client);
+
+                ProcessUploadS3File::dispatch($cacheId, $params);
             },
             hint: 'This might take a while, please be patient.'
         );
