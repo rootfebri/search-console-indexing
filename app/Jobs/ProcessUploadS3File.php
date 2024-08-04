@@ -12,16 +12,22 @@ class ProcessUploadS3File implements ShouldQueue
     use Queueable;
 
     public S3Client $Client;
+    public string $region;
+    public Credentials $Credentials;
+    public array $params;
 
     /**
      * Create a new job instance.
      */
     public function __construct(
-        public Credentials $credentials,
-        public string      $region,
-        public array       $params
+        Credentials $credentials,
+        string      $region,
+        array       $params
     )
     {
+        $this->Credentials = $credentials;
+        $this->region = $region;
+        $this->params = $params;
     }
 
     /**
@@ -32,7 +38,7 @@ class ProcessUploadS3File implements ShouldQueue
         $this->Client = new S3Client([
             'region' => $this->region,
             'version' => 'latest',
-            'credentials' => $this->credentials
+            'credentials' => $this->Credentials
         ]);
         $this->Client->putObject($this->params);
     }
