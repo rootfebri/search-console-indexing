@@ -178,4 +178,9 @@ trait HasHelper
             ]
         };
     }
+
+    private function last24(): float|int|string
+    {
+        return now()->subHours(24)->timestamp;
+    }
 }

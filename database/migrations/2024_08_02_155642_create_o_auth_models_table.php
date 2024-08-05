@@ -18,7 +18,7 @@ return new class extends Migration
             $table->string('client_secret');
             $table->string('refresh_token');
             $table->integer('limit')->unsigned()->default(200);
-            $table->timestamp('refresh_time')->nullable();
+            $table->integer('refresh_time')->nullable();
             $table->foreignIdFor(\App\Models\ServiceAccount::class);
             $table->timestamps();
         });

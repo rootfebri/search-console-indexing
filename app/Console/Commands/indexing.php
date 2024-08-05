@@ -48,9 +48,10 @@ class indexing extends Command
         if ($this->account->google_verifcation) {
             $baseFile = basename($this->sitemap);
             $gVerify = "{$this->account->google_verifcation}.html";
-            $areYouOwner = @file_get_contents(str_replace($baseFile, $gVerify, $this->sitemap));
-            if (!$areYouOwner || str_contains($areYouOwner, $this->account->google_verifcation)) {
-                if (!$this->confirm("$gVerify tidak ditemukan, Tetap lanjutkan?")) {
+            $linkVerify = str_replace($baseFile, $gVerify, $this->sitemap);
+            $areYouOwner = @file_get_contents($linkVerify);
+            if (!$areYouOwner) {
+                if (!$this->confirm("$linkVerify tidak ditemukan, Tetap lanjutkan?")) {
                     return;
                 }
             }
@@ -104,11 +105,21 @@ class indexing extends Command
 
     protected function selectServiceAccount(): void
     {
-        $accounts = ServiceAccount::orderBy('id')
-            ->pluck('email')
-            ->toArray();
+        $accounts = ServiceAccount::all()->load('oauths');
+        $fmt = array_map(function ($email) {
+            $limits = ServiceAccount::where('email', $email)?->first()->oauths()->pluck('limit')->toArray();
 
-        $email = $this->choice("Enter service account ID", $accounts);
+            $oauthLimit = 0;
+            foreach ($limits as $limit) {
+                $oauthLimit += $limit ?? 0;
+            }
+
+            return "$email => [limit: $oauthLimit]";
+        }, $accounts->pluck('email')->toArray());
+
+        $email = $this->choice("Enter service account ID", $fmt);
+        $email = explode(' ', $email)[0];
+
         if (!$this->account = ServiceAccount::where('email', $email)->first()) {
             $this->error('Something went wrong!');
             exit(1);
@@ -117,31 +128,33 @@ class indexing extends Command
 
     protected function runIndexing(): void
     {
-        $oauths = $this->account->oauths()->where('limit', '<=', self::MAX_INDEXING);
+        $oauths = $this->account->oauths()->get();
 
         foreach ($oauths as $oauth) {
+            $reset = now()->subHours(24)->timestamp - $oauth->refresh_time ?? 0;
+            if ($reset > 0) {
+                $oauth->limit = 200;
+                $oauth->refresh_time = now()->timestamp;
+                $oauth->save();
+            }
             $this->processApiKey($oauth);
         }
     }
 
     protected function processApiKey(OAuthModel $oauth): void
     {
+        if ($oauth->limit < 1) {
+            $this->info("Request limit exceeded for $oauth->project_id");
+            return;
+        }
+
         $this->google_client = $this->indexer($this->google_client, $oauth);
         $request = $this->google_client->authorize();
-        if ($oauth->limit < 1) {
-            if ($oauth->refresh_time <= now()->subHours(24)) {
-                $oauth->limit = 200;
-                $oauth->refresh_time = now();
-                $oauth->save();
-            } else {
-                return;
-            }
-        }
 
         foreach ($this->urlLists as $url) {
             $this->content['url'] = $url;
             unset($this->urlLists[$url]);
-            $status = $this->requestIndex($request);
+            $status = $this->submit($request);
 
             if ($status === null) {
                 break;
@@ -157,7 +170,7 @@ class indexing extends Command
         }
     }
 
-    protected function requestIndex(Client|ClientInterface $request): ?bool
+    protected function submit(Client|ClientInterface $request): ?bool
     {
         $code = 0;
         $url = $this->content['url'];
@@ -173,11 +186,17 @@ class indexing extends Command
             } else {
                 $indexed->success = false;
                 $this->line("[$code] $url -> Request failed!");
-                if ($hasMessage = @json_decode($response->getBody()->getContents(), true))
+                if ($hasMessage = @json_decode($response->getBody()->getContents(), true)) {
                     $this->line("Message/Code: " . $hasMessage['error']['message'] ?? $code);
+                }
             }
         } catch (GuzzleException $e) {
-            $this->logError("Error occurred while indexing URL: $url", $e);
+            if ($hasMessage = @json_decode($e->getMessage())) {
+                $this->line("Message/Code: " . $hasMessage['error']['message'] ?? $code);
+            } else {
+                $this->logError("Error occurred while indexing URL: $url", $e);
+            }
+
             $indexed->success = false;
         }
 
