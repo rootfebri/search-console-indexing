@@ -38,10 +38,13 @@ class OAuthCallback extends Controller
 
         $serviceAccount = ServiceAccount::firstOrCreate(['email' => $this->credential->account]);
         try {
-            $serviceAccount->oauths()->create([
+            $data = [
                 'client_id' => $this->credential->client_id,
                 'client_secret' => $this->credential->client_secret,
                 'project_id' => $this->credential->project_id,
+            ];
+
+            $serviceAccount->oauths()->updateOrCreate($data, [
                 'refresh_token' => $token['refresh_token'],
             ]);
         } catch (Exception $e) {
