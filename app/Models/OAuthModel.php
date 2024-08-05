@@ -22,4 +22,34 @@ class OAuthModel extends Model
     {
         return $this->belongsTo(ServiceAccount::class);
     }
+
+    private function shouldReset(): bool
+    {
+        if (!$this->refresh_time) {
+            $this->refresh_time = time();
+            $this->save();
+            return false;
+        }
+        $refreshOn = $this->refresh_time + 24 * 60 * 60;
+        if (time() > $refreshOn) {
+            return true;
+        }
+        return false;
+    }
+
+    public function reset(): static
+    {
+        if ($this->shouldReset()) {
+            $this->refresh_time = time();
+            $this->limit = 200;
+            $this->save();
+        }
+
+        return $this;
+    }
+
+    public function usable(): bool
+    {
+        return $this->limit > 0;
+    }
 }

@@ -19,6 +19,7 @@ class indexing extends Command
     use GoogleOAuth, HasConstant;
 
     protected const ENDPOINT_URL_UPDATED = 'https://indexing.googleapis.com/v3/urlNotifications:publish';
+    public int $submitted = 0;
     /**
      * The name and signature of the console command.
      *
@@ -31,11 +32,7 @@ class indexing extends Command
     protected ServiceAccount $account;
     protected array $content = ['type' => "URL_UPDATED"];
     protected bool $alwaysContinue = true;
-
-    public function __construct(protected Google_Client $google_client)
-    {
-        parent::__construct();
-    }
+    protected Google_Client $google_client;
 
     public function handle(): void
     {
@@ -92,11 +89,7 @@ class indexing extends Command
     {
         $this->line("Cleaning up indexed URLs...");
 
-        $lessThan24Hours = Indexed::where('success', true)
-            ->where('created_at', '>', now()->subHours(24))
-            ->where('sitemap_url', $this->sitemap)
-            ->pluck('url')
-            ->toArray();
+        $lessThan24Hours = Indexed::where('success', true)->where('created_at', '>', now()->subHours(24))->where('sitemap_url', $this->sitemap)->pluck('url')->toArray();
 
         $this->urlLists = array_filter($this->urlLists, fn($url) => !in_array($url, $lessThan24Hours));
         $this->line(count($this->urlLists) . " URLs left after cleanup");
@@ -117,7 +110,7 @@ class indexing extends Command
             return "$email => [limit: $oauthLimit]";
         }, $accounts->pluck('email')->toArray());
 
-        $email = $this->choice("Enter service account ID", $fmt);
+        $email = $this->choice("Enter service account ID", $fmt, 0);
         $email = explode(' ', $email)[0];
 
         if (!$this->account = ServiceAccount::where('email', $email)->first()) {
@@ -131,82 +124,107 @@ class indexing extends Command
         $oauths = $this->account->oauths()->get();
 
         foreach ($oauths as $oauth) {
-            $reset = now()->subHours(24)->timestamp - $oauth->refresh_time ?? 0;
-            if ($reset > 0) {
-                $oauth->limit = 200;
-                $oauth->refresh_time = now()->timestamp;
-                $oauth->save();
-            }
+            $oauth->reset();
             $this->processApiKey($oauth);
         }
     }
 
     protected function processApiKey(OAuthModel $oauth): void
     {
-        if ($oauth->limit < 1) {
+        if (!$oauth->usable()) {
             $this->info("Request limit exceeded for $oauth->project_id");
             return;
         }
 
-        $this->google_client = $this->indexer($this->google_client, $oauth);
-        $request = $this->google_client->authorize();
+        $request = $this->tryAuth($oauth);
+        if (!$request) {
+            $this->info("[401] Failed to authorize $oauth->project_id");
+            return;
+        }
 
         foreach ($this->urlLists as $url) {
             $this->content['url'] = $url;
             unset($this->urlLists[$url]);
-            $status = $this->submit($request);
-
+            try {
+                $status = $this->submit($request);
+            } catch (Throwable $e) {
+                $this->logError("LINE: $this->submitted | Error occurred while indexing URL: $url", $e->getCode());
+                $this->newLine();
+                return;
+            }
             if ($status === null) {
-                break;
+                return;
             } else {
-                $oauth->limit--;
-                $oauth->save();
+                $oauth->decrement('limit');
             }
 
             $status === false && $this->alwaysContinue && $this->alwaysContinue = $this->confirm('Request gagal, selalu tanya untuk melanjutkan?', true);
-            if ($oauth->limit < 1) {
-                break;
+            if (!$oauth->usable()) {
+                return;
+            }
+        }
+    }
+
+    private function tryAuth(OAuthModel $oauth, $retry = 3): Client|ClientInterface|null
+    {
+        $sleep = 5;
+        try {
+            $this->google_client = $this->setup($oauth);
+            return $this->google_client->authorize();
+        } catch (Throwable) {
+            if ($retry > 0) {
+                sleep($sleep);
+                return $this->tryAuth($retry - 1);
+            } else {
+                return null;
             }
         }
     }
 
     protected function submit(Client|ClientInterface $request): ?bool
     {
+        $this->submitted++;
         $code = 0;
         $url = $this->content['url'];
         $indexed = Indexed::firstOrCreate(['url' => $url, 'sitemap_url' => $this->sitemap]);
 
         try {
-            $response = $request->post(self::ENDPOINT_URL_UPDATED, ['body' => json_encode($this->content)]);
+            $response = @$request->post(self::ENDPOINT_URL_UPDATED, ['body' => json_encode($this->content)]);
             $code += $response->getStatusCode();
-
-            if ($code >= 200 && $code < 300) {
-                $indexed->success = true;
-                $this->line("[$code] $url -> Request success!");
-            } else {
-                $indexed->success = false;
-                $this->line("[$code] $url -> Request failed!");
-                if ($hasMessage = @json_decode($response->getBody()->getContents(), true)) {
-                    $this->line("Message/Code: " . $hasMessage['error']['message'] ?? $code);
-                }
-            }
         } catch (GuzzleException $e) {
             if ($hasMessage = @json_decode($e->getMessage())) {
-                $this->line("Message/Code: " . $hasMessage['error']['message'] ?? $code);
+                $this->line("LINE: $this->submitted | Message/Code: " . $hasMessage['error']['message'] ?? $code);
             } else {
-                $this->logError("Error occurred while indexing URL: $url", $e);
+                $this->logError("LINE: $this->submitted | Error occurred while indexing URL: $url", $e);
             }
 
             $indexed->success = false;
+            $indexed->save();
+            $this->newLine();
+            return null;
+        } catch (Throwable $e) {
+            $this->logError("LINE: $this->submitted | Error occurred while indexing URL: $url", $e->getCode());
+            $indexed->success = false;
+            $indexed->save();
+            $this->newLine();
+            return null;
         }
 
+        if ($code >= 200 && $code < 300) {
+            $indexed->success = true;
+            $this->line("LINE: $this->submitted | [$code] $url -> Request success!");
+        } else {
+            $indexed->success = false;
+            $this->line("LINE: $this->submitted | [$code] $url -> Request failed!");
+        }
         $indexed->save();
+        $this->newLine();
         return $code >= 200 && $code < 300 ? true : ($code >= 300 && $code < 600 ? false : null);
     }
 
     protected function logError(string $message, Throwable $e): void
     {
-        $this->line($message);
-        $this->line($e->getMessage());
+        $this->info($message);
+        $this->info($e->getMessage());
     }
 }
