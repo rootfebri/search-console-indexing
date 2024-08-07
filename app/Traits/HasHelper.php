@@ -171,10 +171,12 @@ trait HasHelper
         $this->confirm('Press any key to continue...');
     }
 
-    private function setObjectParams(string $fullpath, mixed $body, bool $ACL = true): array
+    private function setObjectParams(string $fullpath, mixed $body, bool $ACL = true, ?string $initialPath = null): array
     {
+        $filename = $initialPath ? $initialPath . basename($fullpath) : basename($fullpath);
+
         $default = [
-            'Key' => basename($fullpath),
+            'Key' => $filename,
             'Body' => $body,
             'Bucket' => $this->bucket,
             'ContentType' => mime_content_type($fullpath),
