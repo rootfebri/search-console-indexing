@@ -8,6 +8,7 @@ use function Laravel\Prompts\select;
 
 trait HasHelper
 {
+    protected ?bool $WIN;
     /**
      * Scans the directory specified by $this->path for JSON files.
      *
@@ -47,6 +48,14 @@ trait HasHelper
         }
     }
 
+    private function array_filter(array $array, callable $lambda): array
+    {
+        if (count($array) > 0) {
+            return array_values(array_filter($array, $lambda));
+        }
+        return [];
+    }
+
     /**
      * Allows the user to navigate and select a directory from the terminal.
      *
@@ -66,11 +75,14 @@ trait HasHelper
 
         while (true) {
             $this->flushTerminal();
-            $prompt = 'Select directory [' . rtrim($initialDir, '.') . ']';
-            if (isset($_SERVER['OS']) && str_starts_with(strtolower($_SERVER['OS']), 'win')) {
+
+            $totalFiles = $this->array_filter(scandir($initialDir), fn($file) => is_file($file));
+            $prompt = "Select directory [$initialDir | File count: " . count($totalFiles) . "]";
+
+            if ($this->WIN) {
                 $path = $this->choice(question: $prompt, choices: $this->scandir($initialDir), default: 0, attempts: 3);
             } else {
-                $path = select(label: $prompt, options: $this->scandir($initialDir), default: 0, scroll: 10);
+                $path = select(label: $prompt, options: $this->scandir($initialDir), default: 0);
             }
 
             if ($path === '.') {
