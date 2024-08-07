@@ -59,4 +59,9 @@ trait HasConstant
         'IgnorePublicAcls' => false,
         'RestrictPublicBuckets' => false,
     ];
+    public const S3_UPLOAD_MODES = [
+        'Select file to upload' => 'singleUpload',
+//        'Select files to upload' => 'multipleUpload',
+        'Select folder to upload' => 'directoryUpload',
+    ];
 }
