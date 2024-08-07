@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Apikey;
 use App\Models\OAuthModel;
 use App\Models\ServiceAccount;
 use App\Traits\HasConstant;
@@ -125,8 +126,13 @@ class Add extends Command
             $data = @file_get_contents($jsonFile);
             $truncFilename = substr(basename($jsonFile), 0, 15) . "...";
 
-            if (!$data) continue;
-            if (!$serviceAccount->apikeys()->create(['data' => str_replace("\n", '', $data)])) {
+            if (!$data) {
+                continue;
+            } elseif (Apikey::where('data', str_replace("\n", '', $data))->first() !== null) {
+                $this->line($this->red("API key $truncFilename already exists!"));
+                unlink($jsonFile);
+                continue;
+            } elseif (!$serviceAccount->apikeys()->create(['data' => str_replace("\n", '', $data)])) {
                 $this->line("Error adding API key $truncFilename for: $serviceAccount->email");
                 continue;
             }
