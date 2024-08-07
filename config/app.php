@@ -14,6 +14,7 @@ return [
     */
 
     'name' => env('APP_NAME', 'Laravel'),
+    'loop_safety' => env('MAX_LOOP_SAFETY', 1000),
     'access_key' => env('AWS_ACCESS_KEY_ID'),
     'secret_key' => env('AWS_SECRET_ACCESS_KEY'),
 

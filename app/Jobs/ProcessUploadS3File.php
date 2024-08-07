@@ -4,12 +4,10 @@ namespace App\Jobs;
 
 use App\Traits\HasArcS3;
 use App\Traits\HasConstant;
-use App\Types\S3ArcType;
 use Aws\Credentials\Credentials;
 use Aws\S3\S3Client;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Support\Facades\Cache;
 use Throwable;
 
 class ProcessUploadS3File implements ShouldQueue
@@ -35,11 +33,11 @@ class ProcessUploadS3File implements ShouldQueue
      */
     public function handle(): void
     {
-        $params = $this->pullFirst();
-        if (count($params) < 1) {
+        if ((int)$this->read(true) < 1) {
             return;
         }
 
+        $params = $this->pullFirst();
         $this->Client = new S3Client([
             'region' => $this->region,
             'version' => 'latest',

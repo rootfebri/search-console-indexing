@@ -250,15 +250,13 @@ trait S3Helper
             ->advance();
         $this->progress
             ->label("Queuing " . basename($file))
-            ->hint($this->est($totalFiles))
+            ->hint($this->est($totalFiles) . " | NOTE*: run with 'php artisan queue:work' to start the worker process")
             ->render();
 
-        // Wait for the queue to match the limit
         if ((int)$this->read(true) === $useConcurrent) {
             while (true) {
                 if ($this->read(true) > 0) {
-                    // limit the loop to prevent high CPU usage for 1ms
-                    usleep(microseconds: 1000);
+                    usleep(microseconds: config('app.loop_safety'));
                     ProcessUploadS3File::dispatch($this->Credentials, $this->region);
                     $this->progress
                         ->label("Upload in progress...  | " . (int)$this->read(true))
