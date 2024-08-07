@@ -176,14 +176,43 @@ trait S3Helper
         if (!$this->bucket) {
             $this->selectBucket();
         }
-        $isBulkUpload = select('Bulk upload?', ['yes', 'no'], true, 2);
+
         $isAcl = select('with public ACL?', ['yes', 'no'], 0, 2);
-        $this->flushTerminal();
-        if ($isBulkUpload === 'yes') {
-            $this->bulkUpload($isAcl === 'yes');
-        } else {
-            $this->upload($isAcl === 'yes');
-        }
+        $uploadType = select('Upload Type', array_keys(self::S3_UPLOAD_MODES), 0);
+
+        $this->startTime = microtime(true);
+        $this->{self::S3_UPLOAD_MODES[$uploadType]}($isAcl);
+    }
+
+    private function directoryUpload($isAcl): void
+    {
+        ini_set('memory_limit', "-1");
+
+        $pathToDir = $this->selectDir(base_path());
+
+        $files = array_values(array_filter(scandir($pathToDir), fn($name) => !is_dir($pathToDir . DIRECTORY_SEPARATOR . $name) && file_exists($pathToDir . DIRECTORY_SEPARATOR . $name)));
+        $files = array_map(fn($file) => $pathToDir . DIRECTORY_SEPARATOR . $file, $files);
+        $totalFiles = count($files);
+
+        progress(
+            label: 'Uploading files...',
+            steps: $files,
+            callback: function ($file, Progress $progress) use ($isAcl, $totalFiles) {
+                $progress
+                    ->label("Uploading " . basename($file))
+                    ->hint("[" . (int)$progress->steps . "] Estimated time: " . $this->calculateTime($totalFiles, (int)$progress->steps));
+
+                $params = $this->setObjectParams(
+                    fullpath: $file,
+                    body: @file_get_contents($file),
+                    ACL: $isAcl
+                );
+                ProcessUploadS3File::dispatch($this->Credentials, $this->region, $params);
+            },
+            hint: 'This might take a while, please be patient.'
+        );
+
+        $this->pause();
     }
 
     private function bulkUpload($isAcl): void
@@ -206,9 +235,11 @@ trait S3Helper
             $this->pause();
             return;
         }
+
         $files = array_values(array_filter(scandir($dir), fn($name) => !is_dir($dir . DIRECTORY_SEPARATOR . $name) && file_exists($dir . DIRECTORY_SEPARATOR . $name)));
         $files = array_map(fn($file) => $dir . DIRECTORY_SEPARATOR . $file, $files);
         $totalFiles = count($files);
+
         $this->startTime = microtime(true);
         progress(
             label: 'Uploading files...',
@@ -226,6 +257,11 @@ trait S3Helper
         );
 
         $this->pause();
+    }
+
+    private function singleUpload($isAcl): void
+    {
+        $this->upload($isAcl);
     }
 
     public function calculateTime($totalSteps, $currentStep): string
