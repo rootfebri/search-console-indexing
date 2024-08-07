@@ -24,6 +24,7 @@ class S3 extends Command
      */
     public function handle(): void
     {
+        $this->WIN = isset($_SERVER['OS']) && str_starts_with(strtolower($_SERVER['OS']), 'win');
         $this->init();
     }
 }
