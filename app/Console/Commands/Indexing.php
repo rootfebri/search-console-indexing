@@ -7,6 +7,7 @@ use App\Models\OAuthModel;
 use App\Models\ServiceAccount;
 use App\Traits\GoogleOAuth;
 use App\Traits\HasConstant;
+use App\Traits\HasHelper;
 use Google_Client;
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
@@ -15,13 +16,16 @@ use Illuminate\Console\Command;
 use Laravel\Prompts\Progress;
 use Throwable;
 use function Laravel\Prompts\progress;
+use function Laravel\Prompts\select;
 
 class Indexing extends Command
 {
-    use GoogleOAuth, HasConstant;
+    use GoogleOAuth, HasConstant, HasHelper;
 
     protected const ENDPOINT_URL_UPDATED = 'https://indexing.googleapis.com/v3/urlNotifications:publish';
     public int $submitted = 0;
+    public int $oauthLimits = 0;
+    public int $startTime;
     protected $signature = 'indexing';
     protected $description = 'Start indexing process';
     protected array $urlLists = [];
@@ -31,6 +35,7 @@ class Indexing extends Command
     protected bool $alwaysContinue = true;
     protected Google_Client $google_client;
     protected Progress $progress;
+    protected string $additionalHint = "\n";
 
     public function handle(): void
     {
@@ -84,29 +89,34 @@ class Indexing extends Command
     {
         $this->line("Cleaning up indexed URLs...");
 
-        $skipThis = Indexed::all()
-            ->where('sitemap_url', $this->sitemap)
-            ->where('success', true)
-            ->filter(fn($res) => -24 < $res->last_update)
-            ->pluck('url')
-            ->toArray();
+        $oriCount = count($this->urlLists);
+        $idx = Indexed::all()->where('sitemap_url', $this->sitemap)->where('success', true);
+        $all = $idx->pluck('url')->toArray();
+        $daily = $idx->filter(fn($res) => -24 < $res->last_update)->pluck('url')->toArray();
 
-        $from = count($this->urlLists);
-        $this->urlLists = array_diff($this->urlLists, $skipThis);
-        $this->line($from - count($this->urlLists) . " URLs removed after cleanup");
-        $this->confirm('Randomize URLs?', true) && shuffle($this->urlLists);
+        $question = [
+            'Yes' => array_values(array_filter($this->urlLists, fn($url) => !in_array($url, $all))),
+            'Include over 24 hours' => array_values(array_filter($this->urlLists, fn($url) => !in_array($url, $daily))),
+            'No' => $this->urlLists,
+        ];
+
+        $answer = select("Filter urls?", array_keys($question), 0);
+
+        $this->urlLists = $question[$answer];
+        $this->line($oriCount - count($this->urlLists) . " URLs removed after cleanup");
+        if ($this->confirm('Randomize URLs? [not Recommended]') === true) {
+            shuffle($this->urlLists);
+        } else {
+            sort($this->urlLists, SORT_DESC);
+        }
     }
 
     protected function selectServiceAccount(): void
     {
-        $accounts = ServiceAccount::all()->load('oauths');
-
+        $accounts = ServiceAccount::all();
         foreach ($accounts as $account) {
-            /** @var OAuthModel $oauth */
-            foreach ($account->oauths() as $oauth) {
-                $oauth->reset();
-                $oauth->refresh();
-            }
+            $account->resetOAuths();
+            $account->refresh();
         }
 
         $accounts = ServiceAccount::all()->load('oauths');
@@ -116,11 +126,15 @@ class Indexing extends Command
             return "$email => [limit: $oauthLimit]";
         }, $accounts->pluck('email')->toArray());
 
+        $this->startTime = microtime(true);
         $email = $this->choice("Enter service account ID", $fmt, 0);
-        $email = explode(' ', $email)[0];
+        $expl = explode(' ', $email);
+        $cexpl = count($expl);
+        $email = $expl[0];
+        $this->oauthLimits = rtrim($expl[$cexpl - 1], ']');
 
         $this->progress = progress(
-            label: 'Starting indexing...");',
+            label: 'Starting indexing...',
             steps: $this->urlLists,
             hint: 'This might take a while.'
         );
@@ -133,30 +147,35 @@ class Indexing extends Command
 
     protected function runIndexing(): void
     {
+        $this->flushTerminal();
+        $this->progress->start();
         $oauths = $this->account->oauths()->get();
 
         foreach ($oauths as $oauth) {
             $oauth->reset();
             $this->processApiKey($oauth);
         }
+        $this->progress->finish();
     }
 
     protected function processApiKey(OAuthModel $oauth): void
     {
         if (!$oauth->usable()) {
-            $this->progress->hint("Request limit exceeded for $oauth->project_id");
+            $this->additionalHint = "Request limit exceeded for $oauth->project_id\n";
             return;
         }
 
         $request = $this->tryAuth($oauth);
         if (!$request) {
-            $this->progress->hint("Failed to authorize $oauth->project_id");
+            $this->progress
+                ->hint("Failed to authorize $oauth->project_id")
+                ->render();
             return;
         }
 
         foreach ($this->urlLists as $url) {
             $this->content['url'] = $url;
-            unset($this->urlLists[$url]);
+            $this->removeUrl($url);
             $this->progress->advance();
             try {
                 $status = $this->submit($request);
@@ -173,7 +192,8 @@ class Indexing extends Command
 
             $status === false && $this->alwaysContinue && $this->alwaysContinue = $this->confirm('Request failed, always ask to continue?', true);
             if (!$oauth->usable()) {
-                $this->progress->hint("Request limit exceeded for $oauth->project_id");
+                $this->additionalHint = "Request limit exceeded for $oauth->project_id\n";
+//                $this->progress->hint("Request limit exceeded for $oauth->project_id")->render();
                 return;
             }
         }
@@ -195,12 +215,21 @@ class Indexing extends Command
         }
     }
 
+    private function removeUrl(string $url): void
+    {
+        unset($this->urlLists[$url]);
+        $this->urlLists = array_values($this->urlLists);
+    }
+
     protected function submit(Client|ClientInterface $request): ?bool
     {
         $this->submitted++;
+        $this->progress
+            ->hint($this->estimate())
+            ->render();
         $code = 0;
         $url = $this->content['url'];
-        $indexed = Indexed::create(['url' => $url, 'sitemap_url' => $this->sitemap]);
+        $indexed = Indexed::firstOrCreate(['url' => $url, 'sitemap_url' => $this->sitemap]);
 
         try {
             $response = @$request->post(self::ENDPOINT_URL_UPDATED, ['body' => json_encode($this->content)]);
@@ -211,6 +240,12 @@ class Indexing extends Command
         }
 
         return $this->updateIndexedStatus($indexed, $code, $url);
+    }
+
+    private function estimate(): string
+    {
+        $this->progress->moveCursorUp(1);
+        return $this->progress->magenta("Est. time remaining: " . $this->calculateTime($this->oauthLimits, $this->submitted));
     }
 
     protected function handleException(Throwable $e, Indexed $indexed, string $url): void
@@ -225,17 +260,24 @@ class Indexing extends Command
     {
         $this->progress
             ->label("Error code: $code")
-            ->hint("$message");
+            ->hint("$message")
+            ->render();
     }
 
     protected function updateIndexedStatus(Indexed $indexed, int $code, string $url): ?bool
     {
         if ($code >= 200 && $code < 300) {
             $indexed->success = true;
-            $this->progress->label("Request success! URL: " . basename($url));
+
+            $this->progress
+                ->label($this->progress->green("Request success! URL: " . basename($url)))
+                ->render();
         } else {
             $indexed->success = false;
-            $this->progress->label("Request failed! URL: " . basename($url));
+
+            $this->progress
+                ->label($this->progress->red("Request failed! URL: " . basename($url)))
+                ->render();
         }
 
         $indexed->save();

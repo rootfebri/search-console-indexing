@@ -94,7 +94,7 @@ trait HasHelper
             $totalFiles = $this->array_filter(scandir($initialDir), fn($fileName) => is_file($initialDir . DIRECTORY_SEPARATOR . $fileName));
             $prompt = "Select directory [$initialDir | File count: " . count($totalFiles) . "]";
 
-            if ($this->WIN) {
+            if (isset($_SERVER['OS']) && str_starts_with(strtolower($_SERVER['OS']), 'win')) {
                 $path = $this->choice(question: $prompt, choices: $this->scandir($initialDir), default: 0, attempts: 3);
             } else {
                 $path = select(label: $prompt, options: $this->scandir($initialDir), default: 0);

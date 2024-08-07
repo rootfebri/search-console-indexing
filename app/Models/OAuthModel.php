@@ -26,8 +26,8 @@ class OAuthModel extends Model
     private function shouldReset(): bool
     {
         if (!$this->refresh_time) {
-            $this->refresh_time = time();
-            $this->save();
+            $this->update(['refresh_time' => time()]);
+            $this->refresh();
             return false;
         }
         $refreshOn = $this->refresh_time + 24 * 60 * 60;
@@ -40,9 +40,8 @@ class OAuthModel extends Model
     public function reset(): static
     {
         if ($this->shouldReset()) {
-            $this->refresh_time = time();
-            $this->limit = 200;
-            $this->save();
+            $this->update(['refresh_time' => time(), 'limit' => 200]);
+            $this->refresh();
         }
 
         return $this;
