@@ -19,4 +19,11 @@ class ServiceAccount extends Model
     {
         return $this->hasMany(OAuthModel::class);
     }
+
+    public function resetOAuths(): void
+    {
+        foreach ($this->oauths as $oauth) {
+            $oauth->reset();
+        }
+    }
 }

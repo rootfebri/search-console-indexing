@@ -75,7 +75,7 @@ class Add extends Command
 
             $this->line("Go to: " . route('oauth.index', $credential->project_id));
 
-            while (!Cache::get($credential->project_id . self::DOT_FINISHED)) sleep(3);
+            while (!Cache::get($credential->project_id . self::DOT_FINISHED)) usleep(config('app.loop_safety'));
 
             $this->line(Cache::pull($credential->project_id . self::DOT_FINISHED));
         }
