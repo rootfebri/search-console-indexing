@@ -197,4 +197,29 @@ trait HasHelper
     {
         return now()->subHours(24)->timestamp;
     }
+
+
+    protected function calculateTime($totalSteps, $currentStep): string
+    {
+        if ($currentStep === 0) {
+            return "00:00:00";
+        }
+
+        $timeElapsed = microtime(true) - $this->startTime;
+        $timePerStep = $timeElapsed / $currentStep;
+        $timeRemaining = ($totalSteps - $currentStep) * $timePerStep;
+
+        return $this->convertSecondsToTime($timeRemaining);
+    }
+
+    protected function convertSecondsToTime(float|int $timeRemaining): string
+    {
+        $seconds = $timeRemaining % 60;
+        $minutes = ($timeRemaining / 60) % 60;
+        $hours = ($timeRemaining / 3600);
+        $seconds = str_pad($seconds, 2, '0', STR_PAD_LEFT);
+        $minutes = str_pad($minutes, 2, '0', STR_PAD_LEFT);
+        $hours = str_pad((int)$hours, 2, '0', STR_PAD_LEFT);
+        return "$hours:$minutes:$seconds";
+    }
 }

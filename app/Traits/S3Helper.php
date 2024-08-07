@@ -215,72 +215,9 @@ trait S3Helper
         $this->pause();
     }
 
-    private function bulkUpload($isAcl): void
-    {
-        ini_set('memory_limit', "-1");
-        $dir = $this->selectDir(base_path());
-        $choses = ['Upload this folder' => true, 'Files only' => false];
-        $selected = $this->choices('Select upload type', array_keys($choses));
-        $uploadAsDir = $choses[$selected];
-
-        if ($uploadAsDir) {
-            $this->Client->putObject(
-                $this->setObjectParams(
-                    fullpath: $dir,
-                    body: $dir,
-                    ACL: $isAcl
-                )
-            );
-            $this->info('Bulk upload completed');
-            $this->pause();
-            return;
-        }
-
-        $files = array_values(array_filter(scandir($dir), fn($name) => !is_dir($dir . DIRECTORY_SEPARATOR . $name) && file_exists($dir . DIRECTORY_SEPARATOR . $name)));
-        $files = array_map(fn($file) => $dir . DIRECTORY_SEPARATOR . $file, $files);
-        $totalFiles = count($files);
-
-        $this->startTime = microtime(true);
-        progress(
-            label: 'Uploading files...',
-            steps: $files,
-            callback: function ($file, Progress $progress) use ($isAcl, $totalFiles) {
-                $progress->label("Uploading " . basename($file))->hint("[" . (int)$progress->steps . "]Estimated time: " . $this->calculateTime($totalFiles, (int)$progress->steps));
-                $params = $this->setObjectParams(
-                    fullpath: $file,
-                    body: @file_get_contents($file),
-                    ACL: $isAcl
-                );
-                ProcessUploadS3File::dispatch($this->Credentials, $this->region, $params);
-            },
-            hint: 'This might take a while, please be patient.'
-        );
-
-        $this->pause();
-    }
-
     private function singleUpload($isAcl): void
     {
         $this->upload($isAcl);
-    }
-
-    public function calculateTime($totalSteps, $currentStep): string
-    {
-        $time = (microtime(true) - $this->startTime) * 1000;
-        $timeStep = $time / $currentStep;
-        $timeRemaining = ($totalSteps - $currentStep) * $timeStep;
-        return $this->convertSecondsToTime($timeRemaining);
-    }
-
-    public function convertSecondsToTime(float|int $timeRemaining): string
-    {
-        $seconds = $timeRemaining % 60;
-        $minutes = ($timeRemaining / 60) % 60;
-        $hours = ($timeRemaining / 3600);
-        $seconds = str_pad($seconds, 2, '0', STR_PAD_LEFT);
-        $minutes = str_pad($minutes, 2, '0', STR_PAD_LEFT);
-        $hours = str_pad($hours, 2, '0', STR_PAD_LEFT);
-        return "$hours:$minutes:$seconds";
     }
 
     private function upload($isAcl): void
