@@ -2,17 +2,18 @@
 
 namespace App\Console\Commands;
 
-use App\Models\Apikey;
+use App\Models\OAuthModel;
 use App\Models\ServiceAccount;
 use App\Traits\HasConstant;
 use App\Traits\HasHelper;
 use Exception;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
+use Laravel\Prompts\Concerns\Colors;
 
 class Add extends Command
 {
-    use HasHelper, HasConstant;
+    use HasHelper, HasConstant, Colors;
 
     protected $signature = 'add {task}';
     protected $description = 'Run a task available in the task list';
@@ -64,6 +65,11 @@ class Add extends Command
             } catch (Exception $e) {
                 $this->error("Error: " . $e->getMessage());
                 return;
+            }
+
+            if (OAuthModel::where('project_id', $credential->project_id)->first()) {
+                $this->line($this->red("Autentikasi $credential->project_id sudah pernah dilakukan"));
+                continue;
             }
 
             if (Cache::has($credential->project_id)) {
