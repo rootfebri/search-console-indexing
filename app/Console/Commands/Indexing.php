@@ -12,7 +12,9 @@ use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Console\Command;
+use Laravel\Prompts\Progress;
 use Throwable;
+use function Laravel\Prompts\progress;
 
 class Indexing extends Command
 {
@@ -20,34 +22,21 @@ class Indexing extends Command
 
     protected const ENDPOINT_URL_UPDATED = 'https://indexing.googleapis.com/v3/urlNotifications:publish';
     public int $submitted = 0;
-
-    /**
-     * The name and signature of the console command.
-     *
-     * @var string
-     */
     protected $signature = 'indexing';
-
-    /**
-     * The console command description.
-     *
-     * @var string
-     */
     protected $description = 'Start indexing process';
-
     protected array $urlLists = [];
     protected ?string $sitemap = '';
     protected ServiceAccount $account;
     protected array $content = ['type' => "URL_UPDATED"];
     protected bool $alwaysContinue = true;
     protected Google_Client $google_client;
+    protected Progress $progress;
 
     public function handle(): void
     {
         if (!$this->extractUrls()) return;
         if (!$this->confirm('Continue indexing?', true)) return;
 
-        $this->line("Indexing started...");
         $this->cleanup();
         $this->selectServiceAccount();
 
@@ -62,7 +51,6 @@ class Indexing extends Command
         }
 
         $this->runIndexing();
-        $this->line("Done!");
     }
 
     protected function extractUrls(): bool
@@ -112,6 +100,16 @@ class Indexing extends Command
     protected function selectServiceAccount(): void
     {
         $accounts = ServiceAccount::all()->load('oauths');
+
+        foreach ($accounts as $account) {
+            /** @var OAuthModel $oauth */
+            foreach ($account->oauths() as $oauth) {
+                $oauth->reset();
+                $oauth->refresh();
+            }
+        }
+
+        $accounts = ServiceAccount::all()->load('oauths');
         $fmt = array_map(function ($email) {
             $limits = ServiceAccount::where('email', $email)?->first()->oauths()->pluck('limit')->toArray();
             $oauthLimit = array_sum($limits);
@@ -120,6 +118,12 @@ class Indexing extends Command
 
         $email = $this->choice("Enter service account ID", $fmt, 0);
         $email = explode(' ', $email)[0];
+
+        $this->progress = progress(
+            label: 'Starting indexing...");',
+            steps: $this->urlLists,
+            hint: 'This might take a while.'
+        );
 
         if (!$this->account = ServiceAccount::where('email', $email)->first()) {
             $this->error('Something went wrong!');
@@ -140,34 +144,36 @@ class Indexing extends Command
     protected function processApiKey(OAuthModel $oauth): void
     {
         if (!$oauth->usable()) {
-            $this->info("Request limit exceeded for $oauth->project_id");
+            $this->progress->hint("Request limit exceeded for $oauth->project_id");
             return;
         }
 
         $request = $this->tryAuth($oauth);
         if (!$request) {
-            $this->info("[401] Failed to authorize $oauth->project_id");
+            $this->progress->hint("Failed to authorize $oauth->project_id");
             return;
         }
 
         foreach ($this->urlLists as $url) {
             $this->content['url'] = $url;
             unset($this->urlLists[$url]);
+            $this->progress->advance();
             try {
                 $status = $this->submit($request);
             } catch (Throwable $e) {
                 $this->logError("LINE: $this->submitted | Error occurred while indexing URL: $url", $e->getCode());
-                $this->newLine();
                 return;
             }
             if ($status === null) {
                 return;
             } else {
                 $oauth->decrement('limit');
+                $oauth->refresh();
             }
 
             $status === false && $this->alwaysContinue && $this->alwaysContinue = $this->confirm('Request failed, always ask to continue?', true);
             if (!$oauth->usable()) {
+                $this->progress->hint("Request limit exceeded for $oauth->project_id");
                 return;
             }
         }
@@ -194,7 +200,7 @@ class Indexing extends Command
         $this->submitted++;
         $code = 0;
         $url = $this->content['url'];
-        $indexed = Indexed::firstOrCreate(['url' => $url, 'sitemap_url' => $this->sitemap]);
+        $indexed = Indexed::create(['url' => $url, 'sitemap_url' => $this->sitemap]);
 
         try {
             $response = @$request->post(self::ENDPOINT_URL_UPDATED, ['body' => json_encode($this->content)]);
@@ -204,8 +210,7 @@ class Indexing extends Command
             return null;
         }
 
-        $this->updateIndexedStatus($indexed, $code, $url);
-        return $code >= 200 && $code < 300 ? true : ($code >= 300 && $code < 600 ? false : null);
+        return $this->updateIndexedStatus($indexed, $code, $url);
     }
 
     protected function handleException(Throwable $e, Indexed $indexed, string $url): void
@@ -213,25 +218,28 @@ class Indexing extends Command
         $this->logError("LINE: $this->submitted | Error occurred while indexing URL: $url", $e->getCode());
         $indexed->success = false;
         $indexed->save();
-        $this->newLine();
+        $indexed->refresh();
     }
 
     protected function logError(string $message, int $code): void
     {
-        $this->info($message);
-        $this->info("Error code: $code");
+        $this->progress
+            ->label("Error code: $code")
+            ->hint("$message");
     }
 
-    protected function updateIndexedStatus(Indexed $indexed, int $code, string $url): void
+    protected function updateIndexedStatus(Indexed $indexed, int $code, string $url): ?bool
     {
         if ($code >= 200 && $code < 300) {
             $indexed->success = true;
-            $this->line("LINE: $this->submitted | [$code] $url -> Request success!");
+            $this->progress->label("Request success! URL: " . basename($url));
         } else {
             $indexed->success = false;
-            $this->line("LINE: $this->submitted | [$code] $url -> Request failed!");
+            $this->progress->label("Request failed! URL: " . basename($url));
         }
+
         $indexed->save();
-        $this->newLine();
+
+        return $code >= 200 && $code < 300 ? true : ($code >= 300 && $code < 600 ? false : null);
     }
 }
