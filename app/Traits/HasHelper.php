@@ -3,12 +3,13 @@
 namespace App\Traits;
 
 use Illuminate\Console\Command;
-use function Laravel\Prompts\confirm;
 use function Laravel\Prompts\select;
+use function Termwind\ask;
 
 trait HasHelper
 {
     protected ?bool $WIN;
+
     /**
      * Scans the directory specified by $this->path for JSON files.
      *
@@ -48,12 +49,26 @@ trait HasHelper
         }
     }
 
-    private function array_filter(array $array, callable $lambda): array
+    protected function calculateTime($totalSteps, $currentStep): string
     {
-        if (count($array) > 0) {
-            return array_values(array_filter($array, $lambda));
+        if ($currentStep === 0) {
+            return "00:00:00";
         }
-        return [];
+
+        $timeElapsed = microtime(true) - $this->startTime;
+        $timePerStep = $timeElapsed / $currentStep;
+        $timeRemaining = ($totalSteps - $currentStep) * $timePerStep;
+
+        return $this->convertSecondsToTime($timeRemaining);
+    }
+
+    protected function convertSecondsToTime($seconds): string
+    {
+        $hours = floor($seconds / 3600);
+        $minutes = floor(($seconds % 3600) / 60);
+        $seconds = $seconds % 60;
+
+        return sprintf("%02d:%02d:%02d", $hours, $minutes, $seconds);
     }
 
     /**
@@ -76,7 +91,7 @@ trait HasHelper
         while (true) {
             $this->flushTerminal();
 
-            $totalFiles = $this->array_filter(scandir($initialDir), fn($file) => is_file($file));
+            $totalFiles = $this->array_filter(scandir($initialDir), fn($fileName) => is_file($initialDir . DIRECTORY_SEPARATOR . $fileName));
             $prompt = "Select directory [$initialDir | File count: " . count($totalFiles) . "]";
 
             if ($this->WIN) {
@@ -86,15 +101,13 @@ trait HasHelper
             }
 
             if ($path === '.') {
-                break;
+                return $initialDir;
             } else if ($path === '..') {
                 $initialDir = substr($initialDir, 0, strrpos($initialDir, DIRECTORY_SEPARATOR));
             } else {
                 $initialDir .= DIRECTORY_SEPARATOR . $path;
             }
         }
-
-        return $initialDir;
     }
 
     /**
@@ -114,6 +127,14 @@ trait HasHelper
         } else {
             system('clear');
         }
+    }
+
+    private function array_filter(array $array, callable $lambda): array
+    {
+        if (count($array) > 0) {
+            return array_values(array_filter($array, $lambda));
+        }
+        return [];
     }
 
     /**
@@ -168,7 +189,8 @@ trait HasHelper
 
     private function pause(): void
     {
-        $this->confirm('Press any key to continue...');
+        $this->info('Press any key to continue...');
+        ask('');
     }
 
     private function setObjectParams(string $fullpath, mixed $body, bool $ACL = true, ?string $initialPath = null): array
@@ -196,30 +218,5 @@ trait HasHelper
     private function last24(): float|int|string
     {
         return now()->subHours(24)->timestamp;
-    }
-
-
-    protected function calculateTime($totalSteps, $currentStep): string
-    {
-        if ($currentStep === 0) {
-            return "00:00:00";
-        }
-
-        $timeElapsed = microtime(true) - $this->startTime;
-        $timePerStep = $timeElapsed / $currentStep;
-        $timeRemaining = ($totalSteps - $currentStep) * $timePerStep;
-
-        return $this->convertSecondsToTime($timeRemaining);
-    }
-
-    protected function convertSecondsToTime(float|int $timeRemaining): string
-    {
-        $seconds = $timeRemaining % 60;
-        $minutes = ($timeRemaining / 60) % 60;
-        $hours = ($timeRemaining / 3600);
-        $seconds = str_pad($seconds, 2, '0', STR_PAD_LEFT);
-        $minutes = str_pad($minutes, 2, '0', STR_PAD_LEFT);
-        $hours = str_pad((int)$hours, 2, '0', STR_PAD_LEFT);
-        return "$hours:$minutes:$seconds";
     }
 }

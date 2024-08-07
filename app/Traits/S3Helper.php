@@ -1,4 +1,5 @@
 <?php
+/** @noinspection PhpUnusedPrivateMethodInspection */
 
 namespace App\Traits;
 
@@ -8,6 +9,7 @@ use Aws\S3\Exception\S3Exception;
 use Aws\S3\S3Client;
 use Illuminate\Support\Facades\Cache;
 use Laravel\Prompts\Progress;
+use Throwable;
 use function Laravel\Prompts\confirm;
 use function Laravel\Prompts\progress;
 use function Laravel\Prompts\select;
@@ -25,6 +27,7 @@ trait S3Helper
     public S3Client $Client;
     public Credentials $Credentials;
     public array $promises = [];
+    public Progress $progress;
 
     public function init(): void
     {
@@ -35,7 +38,7 @@ trait S3Helper
             $this->changeAccess();
         }
 
-        $this->region = select('Select AWS region', self::S3_REGIONS, 7, 7);
+        $this->region = select('Select AWS region', self::S3_REGIONS, 0, 7);
 
         $this->Credentials = new Credentials($this->access_key, $this->secret_key);
         $this->Client = new S3Client([
@@ -171,6 +174,55 @@ trait S3Helper
         }
     }
 
+    private function directoryUpload($isAcl): void
+    {
+        ini_set('memory_limit', "-1");
+        $pathToDir = $this->selectDir(base_path());
+
+        $files = array_values(array_filter(scandir($pathToDir), fn($name) => !is_dir($pathToDir . DIRECTORY_SEPARATOR . $name) && file_exists($pathToDir . DIRECTORY_SEPARATOR . $name)));
+        $files = array_map(fn($file) => $pathToDir . DIRECTORY_SEPARATOR . $file, $files);
+        $totalFiles = count($files);
+
+        $this->progress = progress(
+            label: 'Uploading files...',
+            steps: $files,
+        );
+
+        $useConcurrent = null;
+        while (!is_int($useConcurrent) || $useConcurrent > 512 || $useConcurrent < 0) {
+            $useConcurrent = (int)$this->ask('Use batch worker uploads? (type 0-512) [0|1 = sync upload]');
+        }
+
+        $this->progress->start();
+        $this->create([]);
+
+        array_walk($files, function ($file) use ($pathToDir, &$totalFiles, &$isAcl, &$useConcurrent) {
+            if ($useConcurrent < 1) {
+                $this->syncUpload($file, $totalFiles, $isAcl);
+            } else {
+                $this->asyncUpload($file, $totalFiles, $isAcl, $useConcurrent, $pathToDir);
+            }
+        });
+
+        Cache::pull($this::CACHE_WORKER_KEY);
+        $this->progress->finish();
+        $this->pause();
+    }
+
+    private function syncUpload($file, $totalFiles, $isAcl): void
+    {
+        $this->progress->label("Uploading " . basename($file))->hint("Estimated time: " . $this->calculateTime($totalFiles, $this->progress->progress));
+
+        try {
+            $this->Client->putObject($this->setObjectParams(fullpath: $file, body: @file_get_contents($file), ACL: $isAcl));
+            $this->progress->label("Uploading " . basename($file) . " => success")->hint("Estimated time: " . $this->calculateTime($totalFiles, $this->progress->progress));
+        } catch (Throwable $e) {
+            $this->progress->label("Uploading " . basename($file) . " => failed")->hint("Estimated time: " . $this->calculateTime($totalFiles, $this->progress->progress) . "\n {$e->getMessage()}");
+        }
+
+        $this->progress->advance();
+    }
+
     private function putObject(): void
     {
         if (!$this->bucket) {
@@ -184,35 +236,44 @@ trait S3Helper
         $this->{self::S3_UPLOAD_MODES[$uploadType]}($isAcl);
     }
 
-    private function directoryUpload($isAcl): void
+    private function asyncUpload($file, $totalFiles, $isAcl, int $useConcurrent, $pathToDir): void
     {
-        ini_set('memory_limit', "-1");
-
-        $pathToDir = $this->selectDir(base_path());
-
-        $files = array_values(array_filter(scandir($pathToDir), fn($name) => !is_dir($pathToDir . DIRECTORY_SEPARATOR . $name) && file_exists($pathToDir . DIRECTORY_SEPARATOR . $name)));
-        $files = array_map(fn($file) => $pathToDir . DIRECTORY_SEPARATOR . $file, $files);
-        $totalFiles = count($files);
-
-        progress(
-            label: 'Uploading files...',
-            steps: $files,
-            callback: function ($file, Progress $progress) use ($isAcl, $totalFiles) {
-                $progress
-                    ->label("Uploading " . basename($file))
-                    ->hint("[" . (int)$progress->steps . "] Estimated time: " . $this->calculateTime($totalFiles, (int)$progress->steps));
-
-                $params = $this->setObjectParams(
-                    fullpath: $file,
-                    body: @file_get_contents($file),
-                    ACL: $isAcl
-                );
-                ProcessUploadS3File::dispatch($this->Credentials, $this->region, $params);
-            },
-            hint: 'This might take a while, please be patient.'
+        $param = $this->setObjectParams(
+            fullpath: $file,
+            body: @file_get_contents($file) ?? '',
+            ACL: $isAcl,
+            initialPath: $pathToDir
         );
 
-        $this->pause();
+        $this->add($param);
+        $this->progress
+            ->advance();
+        $this->progress
+            ->label("Queuing " . basename($file))
+            ->hint($this->est($totalFiles))
+            ->render();
+
+        // Wait for the queue to match the limit
+        if ((int)$this->read(true) === $useConcurrent) {
+            while (true) {
+                if ($this->read(true) > 0) {
+                    // limit the loop to prevent high CPU usage for 1ms
+                    usleep(microseconds: 1000);
+                    ProcessUploadS3File::dispatch($this->Credentials, $this->region);
+                    $this->progress
+                        ->label("Upload in progress...  | " . (int)$this->read(true))
+                        ->hint($this->est($totalFiles))
+                        ->render();
+                    continue;
+                }
+                break;
+            }
+        }
+    }
+
+    private function est(int $total): string
+    {
+        return "Est to complete: " . $this->calculateTime($total, $this->progress->progress);
     }
 
     private function singleUpload($isAcl): void
@@ -242,6 +303,6 @@ trait S3Helper
     private function selectRegion(): void
     {
         $this->flushTerminal();
-        $this->region = select('Select AWS region', self::S3_REGIONS, 7, 7);
+        $this->region = select('Select AWS region', self::S3_REGIONS, 0, 7);
     }
 }
