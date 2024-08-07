@@ -49,7 +49,7 @@ class ProcessUploadS3File implements ShouldQueue
         try {
             $this->Client->putObject($params);
         } catch (Throwable $e) {
-            @file_put_contents(storage_path('logs/aws_upload_job.log'), "$params->Key => {$e->getMessage()}" . "\n", FILE_APPEND);
+            @file_put_contents(storage_path('logs/aws_upload_job.log'), "{$params['Key']} => {$e->getMessage()}" . "\n", FILE_APPEND);
         }
     }
 }
