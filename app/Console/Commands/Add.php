@@ -9,9 +9,8 @@ use App\Traits\GoogleOAuth;
 use App\Traits\HasConstant;
 use App\Traits\HasHelper;
 use App\Types\CredentialType;
-use DOMDocument;
-use DOMXPath;
 use Exception;
+use Google_Client;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Console\Command;
@@ -35,7 +34,7 @@ class Add extends Command
     protected string $email = '';
     protected string $path;
 
-    public function __construct(public \Google_Client $client)
+    public function __construct(public Google_Client $client)
     {
         parent::__construct();
         $this->path = storage_path('json');
@@ -62,7 +61,7 @@ class Add extends Command
         try {
             $apikeys = ServiceAccount::where(['email' => $this->email])->first()->apikeys;
         } catch (Exception $e) {
-            $this->info("Error: ". $e->getMessage());
+            $this->info("Error: " . $e->getMessage());
             return;
         }
 
@@ -75,7 +74,7 @@ class Add extends Command
                     throw new Exception($this->blue("[$apikey->id]") . $this->red("Autentikasi $credential->project_id sudah pernah dilakukan"));
                 }
             } catch (Exception|Throwable $e) {
-                $this->info("Error: ". $e->getMessage());
+                $this->info("Error: " . $e->getMessage());
                 continue;
             }
 
