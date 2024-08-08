@@ -36,7 +36,7 @@ trait GoogleOAuth
         return $google_client;
     }
 
-    private function throwErr(string $pesan, int $http_code = 400): JsonResponse
+    private function throwErr(string $pesan, int $http_code = 200): JsonResponse
     {
         Cache::forever($this->credential->project_id . self::DOT_FINISHED, $pesan);
         return response()->json(['success' => false, 'message' => $pesan], $http_code);

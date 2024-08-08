@@ -11,7 +11,10 @@
         "laravel/framework": "^11.9",
         "laravel/prompts": "^0.1.24",
         "laravel/tinker": "^2.9",
-        "ext-fileinfo": "*"
+        "ext-fileinfo": "*",
+        "ext-curl": "*",
+        "ext-dom": "*",
+        "ext-libxml": "*"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
