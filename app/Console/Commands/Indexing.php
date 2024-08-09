@@ -164,7 +164,6 @@ class Indexing extends Command
                 $publish = $serviceIndexing->urlNotifications->publish($postBatch);
                 $batch->add($publish);
                 $oauth->decrement('limit');
-                $this->progress->hint($this->estimate())->advance();
                 $this->progress->label($this->magenta("Queing " . basename($url)))->hint($this->estimate())->render();
             } catch (Exception) {
             }
@@ -220,7 +219,7 @@ class Indexing extends Command
         $site->save();
 
         $this->array_remove_one($url, $this->syncSlicedUrls);
-        $this->progress->label($this->green("Request success! URL: " . basename($url)))->hint($this->estimate())->render();
+        $this->progress->label($this->green("Request success! URL: " . basename($url)))->render();
     }
 
     private function array_remove_one(mixed $value, array &$array): void
@@ -236,7 +235,7 @@ class Indexing extends Command
             $site->request_on = time();
             $site->success = true;
             $site->save();
-            $this->progress->label($this->red("Request failed! URL: " . basename($this->syncSlicedUrls[0])))->hint($this->estimate())->render();
+            $this->progress->label($this->red("Request failed! URL: " . basename($this->syncSlicedUrls[0])))->render();
         });
         $this->syncSlicedUrls = [];
     }
