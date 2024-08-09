@@ -49,6 +49,7 @@ class OAuthModel extends Model
 
     public function usable(): bool
     {
+        $this->refresh();
         return $this->limit > 0;
     }
 }

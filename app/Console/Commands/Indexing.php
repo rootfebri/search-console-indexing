@@ -2,9 +2,9 @@
 
 namespace App\Console\Commands;
 
-use App\Models\Indexed;
 use App\Models\OAuthModel;
 use App\Models\ServiceAccount;
+use App\Models\Site;
 use App\Traits\GoogleOAuth;
 use App\Traits\HasConstant;
 use App\Traits\HasHelper;
@@ -16,33 +16,36 @@ use Google_Service_Indexing;
 use Google_Service_Indexing_UrlNotification;
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
-use GuzzleHttp\Promise;
 use Illuminate\Console\Command;
+use Laravel\Prompts\Concerns\Colors;
 use Laravel\Prompts\Progress;
+use Psr\Http\Message\RequestInterface;
 use Throwable;
 use function Laravel\Prompts\progress;
 use function Laravel\Prompts\select;
 
 class Indexing extends Command
 {
-    use GoogleOAuth, HasConstant, HasHelper;
+    use GoogleOAuth, HasConstant, HasHelper, Colors;
 
-    protected const ENDPOINT_URL_UPDATED = 'https://indexing.googleapis.com/v3/urlNotifications:publish';
     public int $submitted = 0;
-    public int $lastSliced = 0;
-    public int $oauthLimits = 0;
+    public int $lastOffset = 0;
+    public int $tol = 0;
     public int $startTime;
+    public array $urlLists = [];
+    public array $syncSlicedUrls = [];
+    public ?string $sitemap = '';
+    public ServiceAccount $account;
+    public Google_Client $google_client;
+    public Progress $progress;
     protected $signature = 'indexing';
     protected $description = 'Start indexing process';
-    protected array $urlLists = [];
-    protected array $syncSlicedUrls = [];
-    protected ?string $sitemap = '';
-    protected ServiceAccount $account;
-    protected array $content = ['type' => "URL_UPDATED"];
-    protected bool $alwaysContinue = true;
-    protected Google_Client $google_client;
-    protected Progress $progress;
-    protected string $additionalHint = "\n";
+
+    public function __construct(protected ServiceAccount $svcAccount)
+    {
+        parent::__construct();
+        $this->startTime = microtime(true);
+    }
 
     public function handle(): void
     {
@@ -94,219 +97,166 @@ class Indexing extends Command
 
     protected function cleanup(): void
     {
+        sort($this->urlLists);
+        $this->urlLists = array_unique($this->urlLists);
         $this->line("Cleaning up indexed URLs...");
 
         $oriCount = count($this->urlLists);
-        $question = [
-            'Yes' => 'filtered',
-            'Include over 24 hours' => 'over24h',
-            'No' => [],
-        ];
+        $question = ['Yes' => 'filtered', 'Include over 24 hours' => 'over24h', 'No' => [],];
         $answer = select("Filter urls?", array_keys($question), 0);
 
         $this->urlLists = is_string($question[$answer]) ? $this->{$question[$answer]}() : $this->urlLists;
-        $this->line("Before: $oriCount -> After: " . count($this->urlLists));
-
-        sort($this->urlLists, SORT_ASC);
+        $this->line("Before: {$this->red($oriCount)} -> After: " . $this->green(count($this->urlLists)));
     }
 
     protected function selectServiceAccount(): void
     {
-        $accounts = ServiceAccount::all();
-        foreach ($accounts as $account) {
+        $accounts = array_merge(...array_map(function ($account) {
             $account->resetOAuths();
-            $account->refresh();
-        }
+            $oauthLimit = array_sum($account->oauths()->get()->pluck('limit')->toArray());
 
-        $accounts = ServiceAccount::all()->load('oauths');
-        $fmt = array_map(function ($email) {
-            $limits = ServiceAccount::where('email', $email)?->first()->oauths()->pluck('limit')->toArray();
-            $oauthLimit = array_sum($limits);
-            return "$email => [limit: $oauthLimit]";
-        }, $accounts->pluck('email')->toArray());
+            return ["$account->email [Limit < $oauthLimit]" => $account];
+        }, $this->svcAccount::all()->all()));
 
-        $this->startTime = microtime(true);
-        $email = $this->choice("Enter service account ID", $fmt, 0);
-        $expl = explode(' ', $email);
-        $cexpl = count($expl);
-        $email = $expl[0];
-        $this->oauthLimits = rtrim($expl[$cexpl - 1], ']');
-
-        $this->progress = progress(
-            label: 'Starting indexing...',
-            steps: $this->urlLists,
-            hint: 'This might take a while.'
-        );
-
-        if (!$this->account = ServiceAccount::where('email', $email)->first()) {
-            $this->error('Something went wrong!');
-            exit(1);
-        }
+        $this->account = $accounts[select('Select Account', array_keys($accounts))];
+        $this->tol = array_sum($this->account->oauths()->get()->pluck('limit')->toArray());
+        $this->progress = progress(label: 'Starting indexing...', steps: $this->urlLists, hint: 'This might take a while.');
     }
 
     protected function runIndexing(): void
     {
         $this->flushTerminal();
         $this->progress->start();
-        $oauths = $this->account->oauths()->get();
 
-        foreach ($oauths as $oauth) {
-            $oauth->reset();
-            $this->processApiKey($oauth);
-        }
+        $oauths = $this->account->oauths->all();
+        array_walk($oauths, function ($oauth) {
+            try {
+                $this->processApiKey($oauth);
+            } catch (Throwable $e) {
+                throw_if(str_contains(strtolower($e->getMessage()), 'done'));
+                $this->progress->label("Failed to authenticate with Google API: $oauth->project_id")->render();
+            }
+        });
         $this->progress->finish();
     }
 
+    /**
+     * @throws Throwable
+     */
     protected function processApiKey(OAuthModel $oauth): void
     {
-        if (!$oauth->usable()) {
-            $this->additionalHint = "Request limit exceeded for $oauth->project_id\n";
-            return;
-        }
+        if (!$oauth->usable() || $this->lastOffset >= count($this->urlLists)) return;
 
         $request = $this->tryAuth($oauth);
+        throw_if($request === null, "Failed to authenticate with Google API: $oauth->project_id");
+
+        $this->syncSlicedUrls = array_slice(array: $this->urlLists, offset: $this->lastOffset, length: $oauth->limit);
+        $this->lastOffset += count($this->syncSlicedUrls);
+
         $serviceIndexing = new Google_Service_Indexing($request);
         $batch = $serviceIndexing->createBatch();
-
-        if (!$request) {
-            $this->progress->hint("Failed to authorize $oauth->project_id")->render();
-            return;
-        }
-
-        $this->syncSlicedUrls = array_slice($this->urlLists, $this->lastSliced, $oauth->limit);
-        $this->lastSliced = count($this->syncSlicedUrls);
-
         array_walk($this->syncSlicedUrls, function ($url) use (&$serviceIndexing, &$batch, &$oauth) {
             $postBatch = new Google_Service_Indexing_UrlNotification();
-
-            $this->progress
-                ->label($this->progress->green("Queing " . basename($url)))
-                ->render();
             $postBatch->setType('URL_UPDATED');
             $postBatch->setUrl($url);
             try {
-                /** @var \Psr\Http\Message\RequestInterface $publish Just to silence this stupid IDE or Google? */
+                /** @var RequestInterface $publish Just to silence this stupid IDE or Google? */
                 $publish = $serviceIndexing->urlNotifications->publish($postBatch);
                 $batch->add($publish);
                 $oauth->decrement('limit');
-            } catch (Exception) {}
+                $this->progress->hint($this->estimate())->advance();
+                $this->progress->label($this->magenta("Queing " . basename($url)))->hint($this->estimate())->render();
+            } catch (Exception) {
+            }
         });
 
         $results = $batch->execute();
-
         array_walk($results, function (PublishUrlNotificationResponse|GoogleServiceApiException $result) {
             $this->submitted++;
-            $this->progress->hint($this->estimate())->advance();
             if ($result instanceof PublishUrlNotificationResponse) {
                 $this->processResult($result);
             }
         });
 
         $this->processResultWithExceptions();
+        throw_if($this->lastOffset + $oauth->limit >= count($this->urlLists) - 1, "Done!");
     }
 
     private function tryAuth(OAuthModel $oauth, int $retry = 3): Client|ClientInterface|Google_Client|null
     {
-        $sleep = 5;
         try {
             $this->google_client = $this->setup($oauth);
             $this->google_client->setUseBatch(true);
             $this->google_client->authorize();
         } catch (Throwable) {
             if ($retry > 0) {
-                sleep($sleep);
+                usleep(config('app.loop_safety'));
                 return $this->tryAuth($oauth, $retry - 1);
             } else {
+                $countdown = 3;
+                while ($countdown-- > 0) {
+                    $this->progress->label($this->red("Failed to authorize $oauth->project_id"))->hint('HIT CTRL+C to stop OR CONTINUING IN ' . $countdown)->render();
+                    sleep(1);
+                }
                 return null;
             }
         }
         return $this->google_client;
     }
 
+    private function estimate(): string
+    {
+        return $this->magenta("Est. time remaining: " . $this->calculateTime($this->tol, $this->submitted));
+    }
+
     private function processResult(PublishUrlNotificationResponse $result): void
     {
         $url = $result->getUrlNotificationMetadata()->getLatestUpdate()->getUrl();
-        $this->remove($url, $this->syncSlicedUrls);
 
-        $indexed = Indexed::firstOrCreate([
-            'url' => $url,
-            'sitemap_url' => $this->sitemap,
-        ]);
+        $site = Site::findOrNew($url);
+        $site->url = $url;
+        $site->request_on = time();
+        $site->success = true;
+        $site->save();
 
-        $this->updateIndexedStatus($indexed, 200, $url);
+        $this->array_remove_one($url, $this->syncSlicedUrls);
+        $this->progress->label($this->green("Request success! URL: " . basename($url)))->hint($this->estimate())->render();
     }
 
-    private function remove(mixed $value, array &$array): void
+    private function array_remove_one(mixed $value, array &$array): void
     {
         unset($array[array_search($value, $array)]);
         $array = array_values($array);
     }
 
-    protected function updateIndexedStatus(Indexed $indexed, int $code, string $url): ?bool
-    {
-        if ($code >= 200 && $code < 300) {
-            $indexed->success = true;
-
-            $this->progress
-                ->label($this->progress->green("Request success! URL: " . basename($url)))
-                ->render();
-        } else {
-            $indexed->success = false;
-
-            $this->progress
-                ->label($this->progress->red("Request failed! URL: " . basename($url)))
-                ->render();
-        }
-
-        $indexed->save();
-
-        return $code >= 200 && $code < 300 ? true : ($code >= 300 && $code < 600 ? false : null);
-    }
-
     private function processResultWithExceptions(): void
     {
-        while (count($this->syncSlicedUrls) > 0) {
-            $indexed = Indexed::firstOrCreate([
-                'url' => $this->syncSlicedUrls[0],
-                'sitemap_url' => $this->sitemap,
-            ]);
-
-            $this->updateIndexedStatus($indexed, 429, $this->syncSlicedUrls[0]);
-            $this->remove($this->syncSlicedUrls[0], $this->syncSlicedUrls);
-        }
-    }
-
-    private function estimate(): string
-    {
-        $this->progress->moveCursorUp(1);
-        return $this->progress->magenta("Est. time remaining: " . $this->calculateTime($this->oauthLimits, $this->submitted));
-    }
-
-    protected function handleException(Throwable $e, Indexed $indexed, string $url): void
-    {
-        $this->logError("LINE: $this->submitted | Error occurred while indexing URL: $url", $e->getCode());
-        $indexed->success = false;
-        $indexed->save();
-        $indexed->refresh();
-    }
-
-    protected function logError(string $message, int $code): void
-    {
-        $this->progress
-            ->label("Error code: $code")
-            ->hint("$message")
-            ->render();
+        array_walk($this->syncSlicedUrls, function ($url) {
+            $site = Site::findOrNew($url);
+            $site->request_on = time();
+            $site->success = true;
+            $site->save();
+            $this->progress->label($this->red("Request failed! URL: " . basename($this->syncSlicedUrls[0])))->hint($this->estimate())->render();
+        });
+        $this->syncSlicedUrls = [];
     }
 
     private function filtered(): array
     {
-        $onDatabase = Indexed::all()->where('success', true)->pluck('url')->toArray();
-        return $this->array_filter($this->urlLists, fn($url) =>!in_array($url, $onDatabase));
+        $sites = Site::where('success', true)->pluck('url')->toArray();
+        return $this->array_filter(array: $this->urlLists, lambda: fn($url) => !in_array($url, $sites));
     }
 
     private function over24h(): array
     {
-        $idx = Indexed::all()->where('sitemap_url', $this->sitemap)->where('success', true)->filter(fn($res) => -24 < $res->last_update)->pluck('url')->toArray();
-        return $this->array_filter($this->urlLists, fn($url) => !in_array($url, $idx));
+        $sites = Site::all()
+            ->filter(fn($site) => !$site->overHours(23))
+            ->pluck('url')
+            ->toArray();
+
+        return $this->array_filter(
+            array: $this->urlLists,
+            lambda: fn($url) => !in_array($url, $sites)
+        );
     }
 }

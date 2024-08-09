@@ -25,5 +25,6 @@ class ServiceAccount extends Model
         foreach ($this->oauths as $oauth) {
             $oauth->reset();
         }
+        $this->refresh();
     }
 }
