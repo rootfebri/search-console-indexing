@@ -22,8 +22,9 @@ trait GoogleOAuth
         return $client;
     }
 
-    private function init(CredentialType $credential, Google_Client $google_client): Google_Client
+    private function init(CredentialType $credential): Google_Client
     {
+        $google_client = new Google_Client();
         $google_client->setHttpClient(new Request());
         $google_client->setClientId($credential->client_id);
         $google_client->setClientSecret($credential->client_secret);

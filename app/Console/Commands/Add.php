@@ -10,7 +10,6 @@ use App\Traits\HasConstant;
 use App\Traits\HasHelper;
 use App\Types\CredentialType;
 use Exception;
-use Google_Client;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Console\Command;
@@ -34,7 +33,7 @@ class Add extends Command
     protected string $email = '';
     protected string $path;
 
-    public function __construct(public Google_Client $client)
+    public function __construct()
     {
         parent::__construct();
         $this->path = storage_path('json');
@@ -68,7 +67,7 @@ class Add extends Command
         foreach ($apikeys as $apikey) {
             try {
                 $credential = (object)json_decode($apikey->data)->installed;
-                $credential->account = $apikey->serviceAccount->email;
+                $credential->account = $this->email;
                 if (OAuthModel::where('project_id', $credential->project_id)->first()) {
                     $apikey->delete();
                     throw new Exception($this->blue("[$apikey->id]") . $this->red("Autentikasi $credential->project_id sudah pernah dilakukan"));
@@ -78,7 +77,7 @@ class Add extends Command
                 continue;
             }
 
-            $oauthUrl = $this->init(new CredentialType($credential->account, $credential->client_id, $credential->project_id, $credential->client_secret), $this->client)->createAuthUrl();
+            $oauthUrl = $this->init(new CredentialType($credential->account, $credential->client_id, $credential->project_id, $credential->client_secret))->createAuthUrl();
 
             try {
                 $req = new Client(['timeout' => 0, 'allow_redirects' => false]);
