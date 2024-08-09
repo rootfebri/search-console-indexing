@@ -11,11 +11,9 @@ return new class extends Migration {
     public function up(): void
     {
         Schema::create('indexeds', function (Blueprint $table) {
-            $table->id();
-            $table->string('sitemap_url');
-            $table->string('url');
+            $table->string('url')->unique()->primary()->comment('URL for indexing');
             $table->boolean('success')->default(false);
-            $table->timestamps();
+            $table->integer('requested_at');
         });
     }
 
