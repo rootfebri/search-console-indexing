@@ -178,6 +178,10 @@ class Indexing extends Command
 
         array_walk($this->syncSlicedUrls, function ($url) use (&$serviceIndexing, &$batch, &$oauth) {
             $postBatch = new Google_Service_Indexing_UrlNotification();
+
+            $this->progress
+                ->label($this->progress->green("Queing " . basename($url)))
+                ->render();
             $postBatch->setType('URL_UPDATED');
             $postBatch->setUrl($url);
             try {
