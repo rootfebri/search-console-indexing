@@ -3,24 +3,32 @@
 namespace App\Console\Commands;
 
 use App\Models\Apikey;
+use App\Models\OAuthModel;
 use App\Models\ServiceAccount;
+use App\Traits\GoogleOAuth;
 use App\Traits\HasConstant;
 use App\Traits\HasHelper;
+use App\Types\CredentialType;
 use Exception;
+use GuzzleHttp\Client;
+use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
+use Laravel\Prompts\Concerns\Colors;
+use Throwable;
+use function Laravel\Prompts\confirm;
+use function Laravel\Prompts\select;
 
 class Add extends Command
 {
-    use HasHelper, HasConstant;
+    use HasHelper, HasConstant, Colors, GoogleOAuth;
 
-    protected $signature = 'add {task}';
+    protected $signature = 'add';
     protected $description = 'Run a task available in the task list';
     protected string $task = '';
     protected array $tasks = [
-        'OAuth',
         'ServiceAccount',
-        'Sitemap',
+        'OAuth',
     ];
     protected string $email = '';
     protected string $path;
@@ -33,51 +41,65 @@ class Add extends Command
 
     public function handle(): void
     {
-        if (!in_array($this->argument('task'), $this->tasks)) {
-            $this->error("Invalid task. Available tasks: " . implode(", ", $this->tasks));
-            return;
+        while (true) {
+            $this->task = select('What todo?', $this->tasks, 0);
+            $this->{$this->task}();
         }
-
-        $this->task = $this->argument('task');
-        $this->{$this->task}();
     }
 
     public function OAuth(): void
     {
-        if (ServiceAccount::count() > 0) {
-            $serviceAccounts = ['*NEW*', ...ServiceAccount::all()->pluck('email')->toArray()];
-
-            $this->email = $this->choice('Pilih akun service', $serviceAccounts);
-            if ($this->email !== '*NEW*') {
-                $apikeys = ServiceAccount::where('email', $this->email)->first()->apikeys()->get();
-            }
+        if ($svc = ServiceAccount::all()) {
+            $svcArray = $svc->pluck('email')->toArray();
+            $this->email = select('Select email', $svcArray, $svcArray[0]);
+        } else {
+            $this->info($this->red("No service account found"));
+            return;
         }
 
-        while (!$this->validateEmail($this->email)) {
-            $this->email = $this->ask('Email');
+        try {
+            $apikeys = ServiceAccount::where(['email' => $this->email])->first()->apikeys;
+        } catch (Exception $e) {
+            $this->info("Error: " . $e->getMessage());
+            return;
         }
 
-        $apikeys ??= ServiceAccount::firstOrCreate(['email' => $this->email])->apikeys;
         foreach ($apikeys as $apikey) {
             try {
                 $credential = (object)json_decode($apikey->data)->installed;
-            } catch (Exception $e) {
-                $this->error("Error: " . $e->getMessage());
-                return;
+                $credential->account = $this->email;
+                if (OAuthModel::where('project_id', $credential->project_id)->first()) {
+                    $apikey->delete();
+                    throw new Exception($this->blue("[$apikey->id]") . $this->red("Autentikasi $credential->project_id sudah pernah dilakukan"));
+                }
+            } catch (Exception|Throwable $e) {
+                $this->info("Error: " . $e->getMessage());
+                continue;
             }
 
-            if (Cache::has($credential->project_id)) {
-                Cache::forget($credential->project_id);
-            } else {
-                $credential->account = $apikey->serviceAccount->email;
+            $oauthUrl = $this->init(new CredentialType($credential->account, $credential->client_id, $credential->project_id, $credential->client_secret))->createAuthUrl();
+
+            try {
+                $req = new Client(['timeout' => 0, 'allow_redirects' => false]);
+                $response = $req->get($oauthUrl);
+                $loc = $response->getHeader('Location');
+
+                foreach ($loc as $value) {
+                    $res = $req->get($value);
+                    throw_if(str_contains($res->getBody(), 'The OAuth client was disabled'), new Exception("Error: 'The OAuth client was disabled'"));
+                }
+
                 Cache::forever($credential->project_id, $credential);
+                Cache::forever($credential->project_id . '.url', $oauthUrl);
+            } catch (GuzzleException|Throwable $exception) {
+                $apikey->delete();
+                $this->info($credential->project_id . ' -> ' . $this->red($exception->getMessage()));
+                continue;
             }
 
-            $this->line("Go to: " . route('oauth.index', $credential->project_id));
-
+            $this->flushTerminal();
+            $this->line("[{$this->blue("$apikey->id")}/{$apikeys->count()}] Go to: " . route('oauth.index', $credential->project_id));
             while (!Cache::get($credential->project_id . self::DOT_FINISHED)) usleep(config('app.loop_safety'));
-
-            $this->line(Cache::pull($credential->project_id . self::DOT_FINISHED));
         }
     }
 
@@ -88,7 +110,7 @@ class Add extends Command
         if (ServiceAccount::count() > 0) {
             $serviceAccounts = ['*NEW*', ...ServiceAccount::all()->pluck('email')->toArray()];
 
-            $this->email = $this->choice('Pilih akun service', $serviceAccounts);
+            $this->email = select('Pilih akun service', $serviceAccounts, $serviceAccounts[1] ?? 0);
             if ($this->email !== '*NEW*') {
                 $serviceAccount = ServiceAccount::where('email', $this->email)->first();
             }
@@ -99,13 +121,13 @@ class Add extends Command
         $serviceAccount ??= ServiceAccount::firstOrCreate(['email' => $this->email]);
 
         if (!$serviceAccount->google_verifcation) {
-            if ($this->confirm('Add google verification code? just to make sure')) {
+            if (confirm('Add google verification code? just to make sure')) {
                 $serviceAccount->google_verifcation = $this->ask('Type the google verificatoin code');
                 $serviceAccount->save();
             }
         }
 
-        if (!$this->confirm('Continue to add apikey?', true)) {
+        if (!confirm('Continue to add apikey?', true)) {
             $this->info('Done!');
             return;
         }
@@ -119,8 +141,13 @@ class Add extends Command
             $data = @file_get_contents($jsonFile);
             $truncFilename = substr(basename($jsonFile), 0, 15) . "...";
 
-            if (!$data) continue;
-            if (!$serviceAccount->apikeys()->create(['data' => str_replace("\n", '', $data)])) {
+            if (!$data) {
+                continue;
+            } elseif (Apikey::where('data', str_replace("\n", '', $data))->first() !== null) {
+                $this->line($this->red("API key $truncFilename already exists!"));
+                unlink($jsonFile);
+                continue;
+            } elseif (!$serviceAccount->apikeys()->create(['data' => str_replace("\n", '', $data)])) {
                 $this->line("Error adding API key $truncFilename for: $serviceAccount->email");
                 continue;
             }
@@ -129,11 +156,10 @@ class Add extends Command
             unlink($jsonFile);
         }
 
+        if (confirm('Delete this directory?', true)) {
+            $this->deleteDirectory($this->path);
+            $this->path = storage_path('json');
+        }
         $this->info("Done!");
-    }
-
-    public function addSitemap(): void
-    {
-        $this->info("TODO: Add sitemap into database");
     }
 }

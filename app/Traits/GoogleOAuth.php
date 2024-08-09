@@ -22,8 +22,9 @@ trait GoogleOAuth
         return $client;
     }
 
-    private function init(CredentialType $credential, Google_Client $google_client): Google_Client
+    private function init(CredentialType $credential): Google_Client
     {
+        $google_client = new Google_Client();
         $google_client->setHttpClient(new Request());
         $google_client->setClientId($credential->client_id);
         $google_client->setClientSecret($credential->client_secret);
@@ -36,7 +37,7 @@ trait GoogleOAuth
         return $google_client;
     }
 
-    private function throwErr(string $pesan, int $http_code = 400): JsonResponse
+    private function throwErr(string $pesan, int $http_code = 200): JsonResponse
     {
         Cache::forever($this->credential->project_id . self::DOT_FINISHED, $pesan);
         return response()->json(['success' => false, 'message' => $pesan], $http_code);
