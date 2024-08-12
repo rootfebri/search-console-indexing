@@ -46,10 +46,6 @@ This is a Laravel application designed to handle URL indexing using Google's Ind
     php artisan migrate
     ```
 
-6. **Configure OAuth and Google API credentials**:
-    - Add your Google API credentials to the `.env` file.
-    - Configure OAuth settings in the `.env` file.
-
 ## Usage
 > [!TIP]
 > Best ui with unix shell or WSL on windows
