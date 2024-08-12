@@ -26,10 +26,6 @@ class Add extends Command
     protected $signature = 'add';
     protected $description = 'Run a task available in the task list';
     protected string $task = '';
-    protected array $tasks = [
-        'ServiceAccount',
-        'OAuth',
-    ];
     protected string $email = '';
     protected string $path;
 
@@ -42,9 +38,22 @@ class Add extends Command
     public function handle(): void
     {
         while (true) {
-            $this->task = select('What todo?', $this->tasks, 0);
-            $this->{$this->task}();
+            $this->task = select('Menu:', $this::ADD_MENUS, 0);
+            $this->task = str_replace(' ', '', $this->task);
+
+            if ($this->task === 'ConsumeApikey') {
+                $serviceAccount = $this->ServiceAccount();
+                $this->{$this->task}($serviceAccount);
+            } else {
+                $this->{$this->task}();
+            }
         }
+    }
+
+    public function DeleteServiceAccount(): void
+    {
+        $sa = $this->ServiceAccount(true);
+        $sa->delete();
     }
 
     public function OAuth(): void
@@ -103,35 +112,40 @@ class Add extends Command
         }
     }
 
-    public function ServiceAccount(): void
+    public function ServiceAccount(bool $delete = false): ServiceAccount
     {
-        $this->flushTerminal();
+        $all = array_map(fn(ServiceAccount $serviceAccount) => [$serviceAccount->email => $serviceAccount], ServiceAccount::all()->all());
+        /** @var array<string, ServiceAccount> $serviceAccounts */
+        $serviceAccounts = $delete ? array_merge(...$all) : array_merge(['*NEW*' => ServiceAccount::findOrNew('')], ...$all);
 
-        if (ServiceAccount::count() > 0) {
-            $serviceAccounts = ['*NEW*', ...ServiceAccount::all()->pluck('email')->toArray()];
+        $this->email = select(
+            label: 'Select a service account (Search Console Domain Owner)',
+            options: array_keys($serviceAccounts),
+            default: count($serviceAccounts) > 0 ? 1 : 0
+        );
 
-            $this->email = select('Pilih akun service', $serviceAccounts, $serviceAccounts[1] ?? 0);
-            if ($this->email !== '*NEW*') {
-                $serviceAccount = ServiceAccount::where('email', $this->email)->first();
-            }
+        while ($this->email === '*NEW*' || !$this->validateEmail($this->email)) {
+            $this->email = $this->ask('Email');
+            $serviceAccounts[$this->email] = ServiceAccount::create(['email' => $this->email]);
         }
 
-        while (!$this->validateEmail($this->email)) $this->email = $this->ask('Email');
-
-        $serviceAccount ??= ServiceAccount::firstOrCreate(['email' => $this->email]);
+        $serviceAccount = $serviceAccounts[$this->email];
+        $serviceAccount->email = $this->email;
+        $serviceAccount->save();
 
         if (!$serviceAccount->google_verifcation) {
             if (confirm('Add google verification code? just to make sure')) {
-                $serviceAccount->google_verifcation = $this->ask('Type the google verificatoin code');
+                $google_verifcation = $this->ask('Enter Google Verification Site E.g: google7ccb62e6c18...');
+                $serviceAccount->google_verifcation = str_replace(['.html', 'html','.htm', 'htm'], '', $google_verifcation);
                 $serviceAccount->save();
             }
         }
 
-        if (!confirm('Continue to add apikey?', true)) {
-            $this->info('Done!');
-            return;
-        }
+        return $serviceAccount;
+    }
 
+    public function ConsumeApikey(ServiceAccount $serviceAccount): void
+    {
         $this->path = $this->selectDir($this->path);
 
         $jsonFiles = $this->scanJsonDir();
@@ -139,20 +153,20 @@ class Add extends Command
 
         foreach ($jsonFiles as $jsonFile) {
             $data = @file_get_contents($jsonFile);
-            $truncFilename = substr(basename($jsonFile), 0, 15) . "...";
+            $trFilename = substr(basename($jsonFile), 0, 15) . "...";
 
             if (!$data) {
                 continue;
             } elseif (Apikey::where('data', str_replace("\n", '', $data))->first() !== null) {
-                $this->line($this->red("API key $truncFilename already exists!"));
+                $this->line($this->red("API key $trFilename already exists!"));
                 unlink($jsonFile);
                 continue;
             } elseif (!$serviceAccount->apikeys()->create(['data' => str_replace("\n", '', $data)])) {
-                $this->line("Error adding API key $truncFilename for: $serviceAccount->email");
+                $this->line("Error adding API key $trFilename for: $serviceAccount->email");
                 continue;
             }
 
-            $this->info("API key $truncFilename added for: $serviceAccount->email");
+            $this->info("API key $trFilename added for: $serviceAccount->email");
             unlink($jsonFile);
         }
 
