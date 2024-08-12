@@ -63,4 +63,10 @@ trait HasConstant
         'Select file to upload' => 'singleUpload',
     ];
     public const CACHE_WORKER_KEY = 'aws_s3_upload_job';
+    public const ADD_MENUS = [
+        'Service Account',
+        'Consume Apikey',
+        'OAuth',
+        'Delete Service Account',
+    ];
 }

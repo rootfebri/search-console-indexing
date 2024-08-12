@@ -8,6 +8,7 @@ use App\Models\Site;
 use App\Traits\GoogleOAuth;
 use App\Traits\HasConstant;
 use App\Traits\HasHelper;
+use App\Traits\HasWrapper;
 use Google\Service\Exception;
 use Google\Service\Exception as GoogleServiceApiException;
 use Google\Service\Indexing\PublishUrlNotificationResponse;
@@ -27,7 +28,7 @@ use function Laravel\Prompts\select;
 
 class Indexing extends Command
 {
-    use GoogleOAuth, HasConstant, HasHelper, Colors;
+    use GoogleOAuth, HasConstant, HasHelper, Colors, HasWrapper;
 
     public int $submitted = 0;
     public int $lastOffset = 0;
@@ -241,12 +242,10 @@ class Indexing extends Command
     {
         $url = $result->getUrlNotificationMetadata()->getLatestUpdate()->getUrl();
 
-        $site = Site::findOrNew($url);
-        $site->url = $url;
-        $site->request_on = time();
-        $site->success = true;
-        $site->save();
-
+        $this->onSitesUpdate(
+            url: $url,
+            status: true,
+        );
         $this->array_remove_one($url, $this->syncSlicedUrls);
         $this->progress
             ->label($this->green("Request success! URL: " . basename($url)))
@@ -263,10 +262,10 @@ class Indexing extends Command
     private function processResultWithExceptions(): void
     {
         array_walk($this->syncSlicedUrls, function ($url) {
-            $site = Site::findOrNew($url);
-            $site->request_on = time();
-            $site->success = true;
-            $site->save();
+            $this->onSitesUpdate(
+                url: $url,
+                status: true,
+            );
             $this->progress
                 ->label($this->red("Request failed! URL: " . basename($this->syncSlicedUrls[0])))
                 ->hint($this->estimate())
