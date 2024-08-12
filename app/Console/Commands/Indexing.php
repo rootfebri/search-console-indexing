@@ -55,8 +55,11 @@ class Indexing extends Command
     {
         if (!$this->extractUrls()) return;
         if (!confirm('Continue indexing?', true)) return;
-
         $this->cleanup();
+        if (count($this->urlLists) < 1) {
+            $this->line("No URLs found in sitemap");
+            return;
+        }
         $this->selectServiceAccount();
 
         if ($this->account->google_verifcation) {
@@ -281,7 +284,7 @@ class Indexing extends Command
     private function over24h(): array
     {
         $sites = Site::all()
-            ->filter(fn($site) => !$site->overHours(23))
+            ->filter(fn($site) => !$site->overHours())
             ->pluck('url')
             ->toArray();
 
