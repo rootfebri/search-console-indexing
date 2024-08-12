@@ -21,6 +21,7 @@ use Laravel\Prompts\Concerns\Colors;
 use Laravel\Prompts\Progress;
 use Psr\Http\Message\RequestInterface;
 use Throwable;
+use function Laravel\Prompts\confirm;
 use function Laravel\Prompts\progress;
 use function Laravel\Prompts\select;
 
@@ -33,6 +34,9 @@ class Indexing extends Command
     public int $tol = 0;
     public int $startTime;
     public array $urlLists = [];
+    /** @var array<string, Site> $siteStacks */
+    public array $siteStacks = [];
+    public bool $waitOnFail = true;
     public array $syncSlicedUrls = [];
     public ?string $sitemap = '';
     public ServiceAccount $account;
@@ -50,7 +54,7 @@ class Indexing extends Command
     public function handle(): void
     {
         if (!$this->extractUrls()) return;
-        if (!$this->confirm('Continue indexing?', true)) return;
+        if (!confirm('Continue indexing?', true)) return;
 
         $this->cleanup();
         $this->selectServiceAccount();
@@ -97,15 +101,22 @@ class Indexing extends Command
 
     protected function cleanup(): void
     {
+        $this->line("Cleaning up indexed URLs...");
+
+        $urls = $this->urlLists;
+        $isSecure = str_contains($this->sitemap, 'https://');
+        $addPrefix = fn($url) => $isSecure ? 'https://' . $url : 'http://' . $url;
+        $hasPrefix = fn($url) => str_contains($url, 'https://') || str_contains($url, 'http://');
+        $this->urlLists = array_map(fn($url) => !$hasPrefix($url) ? $addPrefix($url) : $url, $urls);
+
         sort($this->urlLists);
         $this->urlLists = array_unique($this->urlLists);
-        $this->line("Cleaning up indexed URLs...");
 
         $oriCount = count($this->urlLists);
         $question = ['Yes' => 'filtered', 'Include over 24 hours' => 'over24h', 'No' => [],];
         $answer = select("Filter urls?", array_keys($question), 0);
 
-        $this->urlLists = is_string($question[$answer]) ? $this->{$question[$answer]}() : $this->urlLists;
+        $this->urlLists = is_string($question[$answer]) ? $this->{$question[$answer]}($this->urlLists) : $this->urlLists;
         $this->line("Before: {$this->red($oriCount)} -> After: " . $this->green(count($this->urlLists)));
     }
 
@@ -129,14 +140,17 @@ class Indexing extends Command
         $this->progress->start();
 
         $oauths = $this->account->oauths->all();
-        array_walk($oauths, function ($oauth) {
-            try {
-                $this->processApiKey($oauth);
-            } catch (Throwable $e) {
-                throw_if(str_contains(strtolower($e->getMessage()), 'done'));
-                $this->progress->label("Failed to authenticate with Google API: $oauth->project_id")->render();
-            }
-        });
+        try {
+            array_walk($oauths, function ($oauth) {
+                try {
+                    $this->processApiKey($oauth);
+                } catch (Throwable $e) {
+                    throw_if(str_contains(strtolower($e->getMessage()), 'done'));
+                    $this->progress->label("Failed to authenticate with Google API: $oauth->project_id")->render();
+                }
+            });
+        } catch (Throwable) {
+        }
         $this->progress->finish();
     }
 
@@ -159,6 +173,7 @@ class Indexing extends Command
             $postBatch = new Google_Service_Indexing_UrlNotification();
             $postBatch->setType('URL_UPDATED');
             $postBatch->setUrl($url);
+            $this->siteStacks[md5($url)] = Site::updateOrCreate(['url' => $url], ['success' => false, 'request_on' => time()]);
             try {
                 /** @var RequestInterface $publish Just to silence this stupid IDE or Google? */
                 $publish = $serviceIndexing->urlNotifications->publish($postBatch);
@@ -171,10 +186,21 @@ class Indexing extends Command
 
         $results = $batch->execute();
         array_walk($results, function (PublishUrlNotificationResponse|GoogleServiceApiException $result) {
+            $this->progress->advance();
             $this->submitted++;
             if ($result instanceof PublishUrlNotificationResponse) {
                 $this->processResult($result);
+                return;
             }
+
+            $this->progress
+                ->label($this->red("Failed to publish"))
+                ->hint($result->getMessage())
+                ->render();
+            if ($this->waitOnFail) {
+                $this->waitOnFail = confirm('Always show this on every fail?', true);
+            }
+            $this->flushTerminal();
         });
 
         $this->processResultWithExceptions();
@@ -219,7 +245,10 @@ class Indexing extends Command
         $site->save();
 
         $this->array_remove_one($url, $this->syncSlicedUrls);
-        $this->progress->label($this->green("Request success! URL: " . basename($url)))->render();
+        $this->progress
+            ->label($this->green("Request success! URL: " . basename($url)))
+            ->hint($this->estimate())
+            ->render();
     }
 
     private function array_remove_one(mixed $value, array &$array): void
@@ -235,15 +264,18 @@ class Indexing extends Command
             $site->request_on = time();
             $site->success = true;
             $site->save();
-            $this->progress->label($this->red("Request failed! URL: " . basename($this->syncSlicedUrls[0])))->render();
+            $this->progress
+                ->label($this->red("Request failed! URL: " . basename($this->syncSlicedUrls[0])))
+                ->hint($this->estimate())
+                ->render();
         });
         $this->syncSlicedUrls = [];
     }
 
-    private function filtered(): array
+    private function filtered($urls): array
     {
-        $sites = Site::where('success', true)->pluck('url')->toArray();
-        return $this->array_filter(array: $this->urlLists, lambda: fn($url) => !in_array($url, $sites));
+        $sites = Site::all()->pluck('url')->toArray();
+        return $this->array_filter(array: $urls, lambda: fn($url) => !in_array($url, $sites));
     }
 
     private function over24h(): array
