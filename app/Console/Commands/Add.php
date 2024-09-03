@@ -50,68 +50,6 @@ class Add extends Command
         }
     }
 
-    public function DeleteServiceAccount(): void
-    {
-        $sa = $this->ServiceAccount(true);
-        $sa->delete();
-    }
-
-    public function OAuth(): void
-    {
-        if ($svc = ServiceAccount::all()) {
-            $svcArray = $svc->pluck('email')->toArray();
-            $this->email = select('Select email', $svcArray, $svcArray[0]);
-        } else {
-            $this->info($this->red("No service account found"));
-            return;
-        }
-
-        try {
-            $apikeys = ServiceAccount::where(['email' => $this->email])->first()->apikeys;
-        } catch (Exception $e) {
-            $this->info("Error: " . $e->getMessage());
-            return;
-        }
-
-        foreach ($apikeys as $apikey) {
-            try {
-                $credential = (object)json_decode($apikey->data)->installed;
-                $credential->account = $this->email;
-                if (OAuthModel::where('project_id', $credential->project_id)->first()) {
-                    $apikey->delete();
-                    throw new Exception($this->blue("[$apikey->id]") . $this->red("Autentikasi $credential->project_id sudah pernah dilakukan"));
-                }
-            } catch (Exception|Throwable $e) {
-                $this->info("Error: " . $e->getMessage());
-                continue;
-            }
-
-            $oauthUrl = $this->init(new CredentialType($credential->account, $credential->client_id, $credential->project_id, $credential->client_secret))->createAuthUrl();
-
-            try {
-                $req = new Client(['timeout' => 0, 'allow_redirects' => false]);
-                $response = $req->get($oauthUrl);
-                $loc = $response->getHeader('Location');
-
-                foreach ($loc as $value) {
-                    $res = $req->get($value);
-                    throw_if(str_contains($res->getBody(), 'The OAuth client was disabled'), new Exception("Error: 'The OAuth client was disabled'"));
-                }
-
-                Cache::forever($credential->project_id, $credential);
-                Cache::forever($credential->project_id . '.url', $oauthUrl);
-            } catch (GuzzleException|Throwable $exception) {
-                $apikey->delete();
-                $this->info($credential->project_id . ' -> ' . $this->red($exception->getMessage()));
-                continue;
-            }
-
-            $this->flushTerminal();
-            $this->line("[{$this->blue("$apikey->id")}/{$apikeys->count()}] Go to: " . route('oauth.index', $credential->project_id));
-            while (!Cache::get($credential->project_id . self::DOT_FINISHED)) usleep(config('app.loop_safety'));
-        }
-    }
-
     public function ServiceAccount(bool $delete = false): ServiceAccount
     {
         $all = array_map(fn(ServiceAccount $serviceAccount) => [$serviceAccount->email => $serviceAccount], ServiceAccount::all()->all());
@@ -136,12 +74,59 @@ class Add extends Command
         if (!$serviceAccount->google_verifcation) {
             if (confirm('Add google verification code? just to make sure')) {
                 $google_verifcation = $this->ask('Enter Google Verification Site E.g: google7ccb62e6c18...');
-                $serviceAccount->google_verifcation = str_replace(['.html', 'html','.htm', 'htm'], '', $google_verifcation);
+                $serviceAccount->google_verifcation = str_replace(['.html', 'html', '.htm', 'htm'], '', $google_verifcation);
                 $serviceAccount->save();
             }
         }
 
         return $serviceAccount;
+    }
+
+    public function DeleteServiceAccount(): void
+    {
+        $sa = $this->ServiceAccount(true);
+        $sa->delete();
+    }
+
+    public function OAuth(): void
+    {
+        $serviceAccount = $this->ServiceAccount();
+        foreach ($serviceAccount->apikeys as $apikey) {
+            try {
+                $credential = (object)json_decode($apikey->data)->installed;
+                $credential->account = $serviceAccount->email;
+                if (OAuthModel::where('project_id', $credential->project_id)->first()) {
+                    $apikey->delete();
+                    throw new Exception($this->blue("[$apikey->id]") . $this->red("Autentikasi $credential->project_id sudah pernah dilakukan"));
+                }
+            } catch (Exception|Throwable $e) {
+                $this->info("Error: " . $e->getMessage());
+                continue;
+            }
+
+            $oauthUrl = $this->init(new CredentialType($credential->account, $credential->client_id, $credential->project_id, $credential->client_secret))->createAuthUrl();
+            try {
+                $req = new Client(['timeout' => 0, 'allow_redirects' => false]);
+                $response = $req->get($oauthUrl);
+                $loc = $response->getHeader('Location');
+
+                foreach ($loc as $value) {
+                    $res = $req->get($value);
+                    throw_if(str_contains($res->getBody(), 'The OAuth client was disabled'), new Exception("Error: 'The OAuth client was disabled'"));
+                }
+
+                Cache::forever($credential->project_id, $credential);
+                Cache::forever($credential->project_id . '.url', $oauthUrl);
+            } catch (GuzzleException|Throwable $exception) {
+                $apikey->delete();
+                $this->info($credential->project_id . ' -> ' . $this->red($exception->getMessage()));
+                continue;
+            }
+
+            $this->flushTerminal();
+            $this->line("[{$this->blue("$apikey->id")}/{$serviceAccount->apikeys()->count()}] Go to: " . route('oauth.index', $credential->project_id));
+            while (!Cache::get($credential->project_id . self::DOT_FINISHED)) usleep(config('app.loop_safety'));
+        }
     }
 
     public function ConsumeApikey(ServiceAccount $serviceAccount): void
@@ -161,11 +146,9 @@ class Add extends Command
                 $this->line($this->red("API key $trFilename already exists!"));
                 unlink($jsonFile);
                 continue;
-            } elseif (!$serviceAccount->apikeys()->create(['data' => str_replace("\n", '', $data)])) {
-                $this->line("Error adding API key $trFilename for: $serviceAccount->email");
-                continue;
             }
 
+            $serviceAccount->apikeys()->create(['data' => str_replace("\n", '', $data)]);
             $this->info("API key $trFilename added for: $serviceAccount->email");
             unlink($jsonFile);
         }
