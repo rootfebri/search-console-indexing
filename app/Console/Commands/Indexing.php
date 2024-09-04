@@ -21,6 +21,7 @@ use Illuminate\Console\Command;
 use Laravel\Prompts\Concerns\Colors;
 use Laravel\Prompts\Progress;
 use Psr\Http\Message\RequestInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Throwable;
 use function Laravel\Prompts\confirm;
 use function Laravel\Prompts\progress;
@@ -39,30 +40,57 @@ class Indexing extends Command
     public array $siteStacks = [];
     public bool $waitOnFail = true;
     public array $syncSlicedUrls = [];
-    public ?string $sitemap = '';
+    public ?string $sitemap = null;
     public ServiceAccount $account;
     public Google_Client $google_client;
     public Progress $progress;
     protected $signature = 'indexing';
     protected $description = 'Start indexing process';
 
-    public function __construct(protected ServiceAccount $svcAccount)
+    public function __construct(protected ServiceAccount $serviceAccounts)
     {
         parent::__construct();
         $this->startTime = microtime(true);
+        $this->addOption(
+            'suppress',
+            'S',
+            InputOption::VALUE_NONE,
+            'Suppress all warnings and errors',
+        );
+
+        $this->addOption(
+            'sitemap',
+            's',
+            InputOption::VALUE_OPTIONAL,
+            'Skip question for sitemap file by giving url to sitemap.xml',
+        );
+
+        $this->addOption(
+            'email',
+            'e',
+            InputOption::VALUE_OPTIONAL,
+            'Skip Service Account selection by providing email address that already exists in database',
+        );
     }
 
     public function handle(): void
     {
-        if (!$this->extractUrls()) return;
-        if (!confirm('Continue indexing?', true)) return;
-        $this->cleanup();
-        if (count($this->urlLists) < 1) {
-            $this->line("No URLs found in sitemap");
+        if ($this->option('email') !== null) {
+            $this->account = ServiceAccount::where('email', $this->option('email'))->first();
+        }
+        $this->sitemap = $this->option('sitemap');
+        if (!$this->extractUrls()) {
             return;
         }
-        $this->selectServiceAccount();
 
+        if ($this->option('sitemap') === null) {
+            if (!confirm('Continue indexing?', true)) {
+                return;
+            }
+        }
+
+        $this->cleanup();
+        $this->selectServiceAccount();
         if ($this->account->google_verifcation) {
             $baseFile = basename($this->sitemap);
             $gVerify = "{$this->account->google_verifcation}.html";
@@ -72,13 +100,12 @@ class Indexing extends Command
                 return;
             }
         }
-
         $this->runIndexing();
     }
 
     protected function extractUrls(): bool
     {
-        while (!str_starts_with($this->sitemap, 'https://')) {
+        while (!str_starts_with($this->sitemap, 'https://') && !str_starts_with($this->sitemap, 'http://')) {
             $this->sitemap = $this->ask("Enter URLs sitemap to be indexed");
             if (strlen($this->sitemap) < 1) {
                 $this->line("Invalid URL, e.g., https://example.com/sitemap.xml");
@@ -117,11 +144,15 @@ class Indexing extends Command
         $this->urlLists = array_unique($this->urlLists);
 
         $oriCount = count($this->urlLists);
-        $question = ['Yes' => 'filtered', 'Include over 24 hours' => 'over24h', 'No' => [],];
-        $answer = select("Filter urls?", array_keys($question), 0);
+        $question = ['Yes' => 'filtered', 'Include over 24 hours' => 'over24h', 'No' => []];
+        $answer = $this->option('sitemap') !== null ? 'No' : select("Filter urls?", array_keys($question), 0);
 
         $this->urlLists = is_string($question[$answer]) ? $this->{$question[$answer]}($this->urlLists) : $this->urlLists;
         $this->line("Before: {$this->red($oriCount)} -> After: " . $this->green(count($this->urlLists)));
+        if (count($this->urlLists) < 1) {
+            $this->line("No URLs found in sitemap");
+            exit(0);
+        }
     }
 
     protected function selectServiceAccount(): void
@@ -131,16 +162,18 @@ class Indexing extends Command
             $oauthLimit = array_sum($account->oauths()->get()->pluck('limit')->toArray());
 
             return ["$account->email [Limit < $oauthLimit]" => $account];
-        }, $this->svcAccount::all()->all()));
+        }, $this->serviceAccounts::all()->all()));
 
-        $this->account = $accounts[select('Select Account', array_keys($accounts))];
+        $this->account ??= $accounts[select('Select Account', array_keys($accounts))];
         $this->tol = array_sum($this->account->oauths()->get()->pluck('limit')->toArray());
         $this->progress = progress(label: 'Starting indexing...', steps: $this->urlLists, hint: 'This might take a while.');
     }
 
     protected function runIndexing(): void
     {
-        $this->flushTerminal();
+        if (!$this->option('email') && !$this->option('sitemap')) {
+            $this->flushTerminal();
+        }
         $this->progress->start();
 
         $oauths = $this->account->oauths->all();
@@ -163,7 +196,9 @@ class Indexing extends Command
      */
     protected function processApiKey(OAuthModel $oauth): void
     {
-        if (!$oauth->usable() || $this->lastOffset >= count($this->urlLists)) return;
+        if (!$oauth->usable() || $this->lastOffset >= count($this->urlLists)) {
+            return;
+        }
 
         $request = $this->tryAuth($oauth);
         throw_if($request === null, "Failed to authenticate with Google API: $oauth->project_id");
@@ -201,7 +236,7 @@ class Indexing extends Command
                 ->label($this->red("Failed to publish"))
                 ->hint($result->getMessage())
                 ->render();
-            if ($this->waitOnFail) {
+            if ($this->option('suppress') === false && $this->waitOnFail) {
                 $this->waitOnFail = confirm('Always show this on every fail?', true);
             }
             $this->flushTerminal();
@@ -274,22 +309,7 @@ class Indexing extends Command
         $this->syncSlicedUrls = [];
     }
 
-    private function filtered($urls): array
+    protected function handleOptions()
     {
-        $sites = Site::all()->pluck('url')->toArray();
-        return $this->array_filter(array: $urls, lambda: fn($url) => !in_array($url, $sites));
-    }
-
-    private function over24h(): array
-    {
-        $sites = Site::all()
-            ->filter(fn($site) => !$site->overHours())
-            ->pluck('url')
-            ->toArray();
-
-        return $this->array_filter(
-            array: $this->urlLists,
-            lambda: fn($url) => !in_array($url, $sites)
-        );
     }
 }
